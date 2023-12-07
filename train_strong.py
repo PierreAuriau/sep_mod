@@ -142,7 +142,7 @@ def test_linear_probe(weak_encoder, strong_encoder, train_loader, test_loader):
 
     log_reg = LogisticRegression().fit(X_train_weak, y_weak_train)
     log_reg_score = log_reg.score(X_test_weak, y_weak_test)
-    print("weak trained on MNIST labels (high) : ", log_reg_score)
+    print("weak evaluated on weak labels (high) : ", log_reg_score)
 
     print('-----')
 
