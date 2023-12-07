@@ -1,0 +1,8 @@
+keras
+kornia
+numpy
+pandas
+scikit_learn
+tensorflow
+torch
+torchvision
