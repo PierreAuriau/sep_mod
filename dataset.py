@@ -58,13 +58,16 @@ def get_dataloaders(weak_modality, n_train=50000, n_test=1000, batch_size=512):
     y_train_weak = []
     y_train_strong = []
     for i in range(n_train):
+        X_train_strong.append((0.5 * X_train_cifar[i] + 0.5 * np.repeat(X_train_mnist[i][:, :, None], 3, axis=2)) / 255.)
         if weak_modality == "cifar":
             X_train_weak.append(0.5 * X_train_cifar[i] / 255.)
+            y_train_weak.append(y_train_cif[i][0])
+            y_train_strong.append(y_train_mni[i])
         elif weak_modality == "mnist":
             X_train_weak.append(0.5 * np.repeat(X_train_mnist[i][:, :, None], 3, axis=2) / 255.)
-        X_train_strong.append((0.5*X_train_cifar[i] + 0.5*np.repeat(X_train_mnist[i][:, :, None], 3, axis=2)) / 255.)
-        y_train_weak.append(y_train_cif[i][0])
-        y_train_strong.append(y_train_mni[i])
+            y_train_weak.append(y_train_mni[i])
+            y_train_strong.append(y_train_cif[i][0])
+
     X_train_weak = np.array(X_train_weak)
     X_train_strong = np.array(X_train_strong)
     y_train_strong = np.array(y_train_strong)
@@ -76,13 +79,15 @@ def get_dataloaders(weak_modality, n_train=50000, n_test=1000, batch_size=512):
     y_test_weak = []
     y_test_strong = []
     for i in range(n_test):
+        X_test_strong.append((0.5 * X_test_cifar[i] + 0.5 * np.repeat(X_test_mnist[i][:, :, None], 3, axis=2)) / 255.)
         if weak_modality == "cifar":
             X_test_weak.append(0.5 * X_test_cifar[i] / 255.)
+            y_test_weak.append(y_test_cif[i][0])
+            y_test_strong.append(y_test_mni[i])
         elif weak_modality == "mnist":
             X_test_weak.append(0.5 * np.repeat(X_test_mnist[i][:, :, None], 3, axis=2) / 255.)
-        X_test_strong.append((0.5 * X_test_cifar[i] + 0.5 * np.repeat(X_test_mnist[i][:, :, None], 3, axis=2)) / 255.)
-        y_test_weak.append(y_test_cif[i][0])
-        y_test_strong.append(y_test_mni[i])
+            y_test_weak.append(y_test_mni[i])
+            y_test_strong.append(y_test_cif[i][0])
     X_test_weak = np.array(X_test_weak)
     X_test_strong = np.array(X_test_strong)
     y_test_strong = np.array(y_test_strong)
