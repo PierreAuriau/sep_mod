@@ -59,7 +59,7 @@ def train(weak_encoder, train_loader, test_loader, n_epochs):
 
 
 # test linear probes
-def test_linear_probe(weak_encoder, test_loader, train_loader):
+def test_linear_probe(weak_encoder, train_loader, test_loader):
     weak_encoder.eval()
     with torch.no_grad():
         X_train_weak = []
