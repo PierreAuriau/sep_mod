@@ -25,6 +25,8 @@ def train(weak_encoder, strong_encoder, train_loader, test_loader, n_epochs, pon
     # data augmentation
     data_aug_pipeline = SimCLRDataAugmentation()
 
+    # Train model
+    print("epoch : 0")
     test_linear_probe(weak_encoder, strong_encoder, train_loader, test_loader)
     for epoch in range(1, n_epochs):
         weak_encoder.train()
@@ -187,7 +189,7 @@ def main(argv):
     pond = args.ponderation
 
     # Instantiate Dataset and Data Loader
-    train_loader, test_loader = get_dataloaders(weak_modality=weak_modality, batch_size=64)
+    train_loader, test_loader = get_dataloaders(weak_modality=weak_modality)
     print("WARNING WRONG BATCH SIZE")
 
     # build model
