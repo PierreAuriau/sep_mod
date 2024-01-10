@@ -190,8 +190,7 @@ def main(argv):
 
     # Instantiate Dataset and Data Loader
     train_loader, test_loader = get_dataloaders(weak_modality=weak_modality)
-    print("WARNING WRONG BATCH SIZE")
-
+    
     # build model
     weak_encoder = torch.load(os.path.join(args.checkpoint_dir,
                                            f"sep_mod_weak_{weak_modality}.pth"))  # WeakEncoder(weak_dim=weak_size).float().cuda()
