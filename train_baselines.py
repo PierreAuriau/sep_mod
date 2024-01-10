@@ -8,8 +8,11 @@ import argparse
 import numpy as np
 import pandas as pd
 import torch
+import torch.nn as nn
 from torch.optim import Adam
+from torchvision.models import resnet18
 from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import balanced_accuracy_score
 # ignore warning
 from warnings import simplefilter
 from sklearn.exceptions import ConvergenceWarning
@@ -110,6 +113,62 @@ def test_linear_probe(weak_encoder, train_loader, test_loader):
 
     return scores
 
+def train_supervised(classifier, train_loader, test_loader, n_epochs, data_aug=False):
+    # define optimizer
+    optimizer = Adam(list(classifier.parameters()), lr=3e-4)
+    # loss
+    loss_fn = nn.CrossEntropyLoss()
+    # data augmentation
+    if data_aug:
+        data_aug_pipeline = SimCLRDataAugmentation()
+    
+    to_save = {"epoch": [], "train_loss": [], "test_loss": [], "accuracy": []}
+    for epoch in range(1, n_epochs):
+        classifier.train()
+        train_loss = 0
+        for _, (_, strong_view, weak_label, _) in enumerate(train_loader):
+            if data_aug:
+                with torch.no_grad():
+                    strong_view = data_aug_pipeline(strong_view)
+
+            # weak_head
+            output = classifier(strong_view.cuda())
+
+            # weak loss
+            loss = loss_fn(output, weak_label.cuda())
+            loss.backward()
+            train_loss += loss.item()
+            optimizer.step()
+            optimizer.zero_grad()
+
+        to_save["epoch"].append(epoch)
+        to_save["train_loss"].append(train_loss)
+        if epoch % 10 == 0:
+            test_loss, accuracy = test_supervised(classifier, test_loader)
+            to_save["test_loss"].append(test_loss)
+            to_save["accuracy"].append(accuracy)
+        else:
+            to_save["test_loss"].append(None)
+            to_save["accuracy"].append(None)
+
+    return to_save
+
+def test_supervised(classifier, test_loader):
+    loss_fn = nn.CrossEntropyLoss()
+    classifier.eval()
+    with torch.no_grad():
+        test_loss = 0
+        y_pred, y_true = [], []
+        for _, (_, strong_view, weak_label, _) in enumerate(test_loader):
+            output = classifier(strong_view.cuda())
+            test_loss += loss_fn(output, weak_label.cuda()).item()
+            y_pred.extend(torch.sigmoid(output).detach().cpu().numpy())
+            y_true.extend(weak_label.detach().cpu().numpy())
+        y_pred = np.asarray(y_pred).argmax(axis=1)
+        y_true = np.asarray(y_true)
+        bacc = balanced_accuracy_score(y_pred=y_pred, y_true=y_true)
+    return test_loss, bacc
+
 
 def parse_args(argv):
     parser = argparse.ArgumentParser(
@@ -121,6 +180,9 @@ def parse_args(argv):
     parser.add_argument(
         "-c", "--checkpoint_dir", type=str, required=True,
         help="Directory where models are saved")
+    parser.add_argument(
+        "-s", "--supervised", action="store_true",
+        help="If set, train a supervised classifer.")
     parser.add_argument(
         "-w", "--weak_size", type=int, default=32,
         help="Latent space size of the weak encoder. Default is 32.")
@@ -148,22 +210,40 @@ def main(argv):
     # Instantiate dataset and dataloader
     train_loader, test_loader = get_dataloaders(weak_modality=weak_modality)
 
-    # build model
-    weak_encoder = WeakEncoder(weak_dim=weak_size).float().cuda()
+    if args.supervised:
+        # build model
+        classifier = resnet18(num_classes=10, weights=None).float().cuda()
 
-    # train model
-    predictions = train(weak_encoder, train_loader, test_loader, n_epochs)
+        # train_model
+        dico = train_supervised(classifier, train_loader, test_loader, n_epochs)
 
-    # save model
-    print("Saving model...")
-    torch.save(weak_encoder, os.path.join(args.checkpoint_dir,
-                                          f"simclr_big_space_trained_on_strong_modality.pth"))
-    # save predictions
-    print("Saving results...")
-    strong_labels = {"cifar": "mnist", "mnist": "cifar"}[weak_modality]
-    df = pd.DataFrame(predictions)
-    df = df.replace({"weak": weak_modality, "strong": strong_labels})
-    df.to_csv(os.path.join(args.checkpoint_dir, "simclr_big_space_trained_on_strong_modality_accuracies.csv"), index=False)
+        # save model
+        print("Saving model...")
+        torch.save(classifier, os.path.join(args.checkpoint_dir,
+                                            f"supervised_for_{weak_modality}_recognition.pth"))
+        # save predictions
+        print("Saving results...")
+        df = pd.DataFrame(dico)
+        df.to_csv(os.path.join(args.checkpoint_dir, f"supervised_{weak_modality}_loss_accuracies.csv"), index=False)
+        
+    else:
+        # build model
+        weak_encoder = WeakEncoder(weak_dim=weak_size).float().cuda()
+
+        # train model
+        predictions = train(weak_encoder, train_loader, test_loader, n_epochs)
+
+        # save model
+        print("Saving model...")
+        torch.save(weak_encoder, os.path.join(args.checkpoint_dir,
+                                            f"simclr_big_space_trained_on_strong_modality.pth"))
+        # save predictions
+        print("Saving results...")
+        strong_labels = {"cifar": "mnist", "mnist": "cifar"}[weak_modality]
+        df = pd.DataFrame(predictions)
+        df = df.replace({"weak": weak_modality, "strong": strong_labels})
+        df.to_csv(os.path.join(args.checkpoint_dir, "simclr_big_space_trained_on_strong_modality_accuracies.csv"), index=False)
+
     print("\n--------\nREMINDER\n--------\n")
     print("WEAK MODALITY : ", weak_modality)
 
