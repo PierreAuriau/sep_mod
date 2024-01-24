@@ -1,6 +1,11 @@
 # !/usr/bin/env python
 # -*- coding: utf-8 -*-
 
+"""
+Train strong encoder and fine-tune weak encoder.
+Weak encoder is previously trained and loaded.
+"""
+
 # import functions
 import os
 import sys

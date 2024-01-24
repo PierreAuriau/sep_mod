@@ -13,7 +13,7 @@ from torch.utils.data.dataset import Dataset
 from torchvision import transforms
 # Dataset de CIFAR
 from keras.datasets import cifar10
-
+import tensorflow.compat.v2 as tf
 
 class CifarMNISTDataset(Dataset):
     def __init__(self, weak_data, strong_data, weak_targets, strong_targets):

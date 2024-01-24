@@ -5,6 +5,7 @@
 import os
 import sys
 import argparse
+import pickle
 import numpy as np
 import pandas as pd
 import torch
@@ -141,6 +142,7 @@ def train_supervised(classifier, train_loader, test_loader, n_epochs, data_aug=F
             optimizer.step()
             optimizer.zero_grad()
 
+            
         to_save["epoch"].append(epoch)
         to_save["train_loss"].append(train_loss)
         if epoch % 10 == 0:
@@ -150,7 +152,29 @@ def train_supervised(classifier, train_loader, test_loader, n_epochs, data_aug=F
         else:
             to_save["test_loss"].append(None)
             to_save["accuracy"].append(None)
-
+        
+        """
+        if epoch % 50 == 0:
+            pck = {}
+            classifier.eval()
+            with torch.no_grad():
+                for _, (_, strong_view, weak_label, _) in enumerate(train_loader):
+                    output = classifier(strong_view.cuda())
+                    img = strong_view.detach().cpu().numpy()
+                    y_true = weak_label.detach().cpu().numpy()
+                    y_pred = output.detach().cpu().numpy()
+                    break
+                pck["train"] = {"inputs": img, "y_true": y_true, "y_pred": y_pred}
+                for _, (_, strong_view, weak_label, _) in enumerate(test_loader):
+                    output = classifier(strong_view.cuda())
+                    img = strong_view.detach().cpu().numpy()
+                    y_true = weak_label.detach().cpu().numpy()
+                    y_pred = output.detach().cpu().numpy()
+                    break
+                pck["test"] = {"inputs": img, "y_true": y_true, "y_pred": y_pred}
+                with open(f"/neurospin/dico/pauriau/data/exp_sepmod/baselines/inputs_outputs_{epoch}.pkl", "wb") as f:
+                    pickle.dump(pck, f)
+        """
     return to_save
 
 def test_supervised(classifier, test_loader):
@@ -209,6 +233,9 @@ def main(argv):
 
     # Instantiate dataset and dataloader
     train_loader, test_loader = get_dataloaders(weak_modality=weak_modality)
+
+    save_train = False
+    save_test = False
 
     if args.supervised:
         # build model
