@@ -161,13 +161,13 @@ class History(object):
             for key in keys:
                 value = self.history[self.current_step][key]
                 msg += f"{key}: {value:.2f} | "
-        
-        fre = ("fold", "run", "epoch")
-        msg = " - ".join([m for m in [f"{k.capitalize()}: {self.history[self.current_step].get(k)}" for k in fre] if "None" not in m])
-        for key, value in self.history[self.current_step].items():
-            if key not in fre and key != "timestep":
-                msg += f" | {key}: {value:.2f}"
-        msg += f" | {self.get_duration(formatting='{h}h {min}min')}"
+        else:        
+            fre = ("fold", "run", "epoch")
+            msg = " - ".join([m for m in [f"{k.capitalize()}: {self.history[self.current_step].get(k)}" for k in fre] if "None" not in m])
+            for key, value in self.history[self.current_step].items():
+                if key not in fre and key != "timestep":
+                    msg += f" | {key}: {value:.2f}"
+            msg += f" | {self.get_duration(formatting='{h}h {min}min')}"
         self.logger.info(msg)
     
     def get_current_step(self):
