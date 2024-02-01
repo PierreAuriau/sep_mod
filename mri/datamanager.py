@@ -25,7 +25,8 @@ TwoModalityItem = namedtuple("TwoModalityItem", ["weak", "strong", "labels"])
 class ClinicalDataManager(object):
 
     def __init__(self, root: str, db: str, preproc: str, labels: List[str] = None, 
-                 two_views: bool = False, batch_size: int = 1, **dataloader_kwargs):
+                 two_views: bool = False, batch_size: int = 1, 
+                 data_augmentation: [str, List[str]] = None, **dataloader_kwargs):
 
         assert db in ["scz", "bd", "asd"], f"Unknown db: {db}"
 
@@ -34,7 +35,14 @@ class ClinicalDataManager(object):
         self.two_views = two_views
         self.batch_size = batch_size
         self.dataloader_kwargs = dataloader_kwargs
-
+        if isinstance(data_augmentation, str):
+            data_augmentation = (data_augmentation, )
+        elif data_augmentation is None:
+            if two_views:
+                data_augmentation = (f"tf_{preproc}")
+                logger.warning(f"Setting basic data augmentations for {preproc} inputs!")
+            else:
+                data_augmentation = ("no", )
         dataset_cls = None
         if db == "scz":
             dataset_cls = SCZDataset
@@ -44,12 +52,12 @@ class ClinicalDataManager(object):
             dataset_cls = ASDDataset
         logger.debug(f"Dataset CLS : {dataset_cls.__name__}")
 
-        input_transforms = {preproc: self.get_input_transforms(preproc=preproc, two_views=two_views)}       
+        input_transforms = {preproc: self.get_input_transforms(preproc=preproc, data_augmentation=data_augmentation)}       
         logger.debug(f"input_transforms : {input_transforms}")        
         self.dataset = dict()
         self.dataset["train"] = dataset_cls(root, preproc=preproc, split="train", two_views=two_views,
                                              transforms=input_transforms, target=labels)
-        input_transforms = {preproc: self.get_input_transforms(preproc=preproc, two_views=False)}        
+        input_transforms = {preproc: self.get_input_transforms(preproc=preproc, data_augmentation=None)}        
         self.dataset["validation"] = dataset_cls(root, preproc=preproc, split="val", two_views=two_views,
                                                   transforms=input_transforms, target=labels)
         self.dataset["test"] = dataset_cls(root, preproc=preproc, split="test",
@@ -125,12 +133,12 @@ class ClinicalDataManager(object):
             return SetItem(**test_loaders)
 
     @staticmethod
-    def get_input_transforms(preproc, two_views):
+    def get_input_transforms(preproc, data_augmentation):
         input_transforms = []
         if preproc == "vbm":
             input_transforms.append(Normalize())
-        if two_views:
-            input_transforms.append(DAModule(transforms=(f"tf_{preproc}", )))
+        if data_augmentation is not None:
+            input_transforms.append(DAModule(transforms=data_augmentation))
         return Compose(input_transforms)
     
     def __str__(self):
