@@ -35,7 +35,8 @@ class WeakEncoder:
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         logger.info(f"Device : {self.device}")
 
-    def train(self, chkpt_dir, exp_name, dataset, nb_epochs, nb_epochs_per_saving=10):
+    def train(self, chkpt_dir, exp_name, dataset, nb_epochs, 
+              data_augmentation, nb_epochs_per_saving=10):
         # loader
         manager = ClinicalDataManager(root="/neurospin/psy_sbox/analyses/2023_pauriau_sepmod/data/root", 
                                       db=dataset, preproc="skeleton", labels=None, 
@@ -122,13 +123,15 @@ class WeakEncoder:
                     logger.info(f"{split} set")
                     if split == "test_intra":
                         loader = manager.get_dataloader(test_intra=True)
-                        representations[split], _, label[split] = self.get_embeddings(loader.test)
+                        representations[split], _ = self.get_embeddings(loader.test)
                     else:
-                        representations[split], _, label[split] = self.get_embeddings(getattr(loader, split))
+                        representations[split], _ = self.get_embeddings(getattr(loader, split))
+                    label[split] = manager.dataset[split].get_target()
                 self.save_representations(representations=representations, epoch=epoch)
             # train predictors
             for i, label  in enumerate(labels):
-                if label in ("diagnosis", "sex", "site"):
+                splits = ["train", "validation", "test", "test_intra"]
+                if label in ("diagnosis", "sex"):
                     clf = LogisticRegression(max_iter=1000)
                     clf.get_predictions = clf.predict_proba
                     metrics = {"roc_auc": lambda y_pred, y_true: roc_auc_score(y_score=y_pred[:, 0], y_true=y_true),
@@ -138,9 +141,20 @@ class WeakEncoder:
                     clf = Ridge()
                     clf.get_predictions = clf.predict
                     metrics = {"rmse": lambda y_pred, y_true: mean_squared_error(y_pred=y_pred, y_true=y_true, squared=False)}                
+                elif label in ("site"):
+                    splits.remove("test") # new sites on external test set
+                    lbl = sorted(manager.dataset[split].all_labels[label].unique())
+                    map_lbl = np.vectorize(lambda pred: {j: l for j,l in enumerate(lbl)}[pred])
+                    clf = LogisticRegression(max_iter=1000)
+                    clf.get_predictions = clf.predict_proba
+                    metrics = {"roc_auc": lambda y_pred, y_true: roc_auc_score(y_score=y_pred, y_true=y_true,
+                                                                               multi_class="ovr", average="macro",
+                                                                               labels=lbl),
+                               "balanced_accuracy": lambda y_pred, y_true: balanced_accuracy_score(y_pred=map_lbl(y_pred.argmax(axis=1)),
+                                                                                                    y_true=y_true)}
                 logger.info(f"Test weak encoder on {label}")
                 clf = clf.fit(representations["train"], labels["train"][:, i])
-                for split in ("train", "validation", "test", "test_intra"):
+                for split in splits:
                     y_pred = clf.get_predictions(representations[split])
                     values = {}
                     for name, metric in metrics.items():
@@ -149,21 +163,19 @@ class WeakEncoder:
                     self.history.log(epoch=epoch, label=label, set=split, **values)
             self.history.save()
             
-    def get_embeddings(self, loader):
+    def get_embeddings(self, dataloader):
         representations = []
         heads = []
-        labels = []
-        pbar = tqdm(total=len(loader), desc=f"Get embeddings")
-        for dataitem in loader:
+        pbar = tqdm(total=len(dataloader), desc=f"Get embeddings")
+        for dataitem in dataloader:
             pbar.update()
             with torch.no_grad():
                 inputs = dataitem.inputs
                 repr, head = self.weak_encoder(inputs.to(self.device))
             representations.extend(repr.detach().cpu().numpy())
             heads.extend(head.detach().cpu().numpy())
-            labels.extend(dataitem.labels.detach().cpu().numpy())
         pbar.close()
-        return np.asarray(representations), np.asarray(heads), np.asarray(labels)
+        return np.asarray(representations), np.asarray(heads)
     
     def save_representations(self, representations, epoch):
         filename = os.path.join(self.checkpointdir, self.get_representation_name(epoch=epoch))
@@ -198,6 +210,20 @@ class WeakEncoder:
     
     def get_chkpt_name(self, epoch):
         return f"WeakEncoder_exp-{self.exp_name}_ep-{epoch}.pth"
+
+
+def parse_args(argv):
+    parser = argparse.Argparse()
+    parser.add_argument("--backbone", requires=True, )
+    parser.add_argument("--latent_dim", requires=True)
+    parser.add_argument("--chkpt_dir", requires=True) 
+    parser.add_argument("--exp_name", requires=True)
+    parser.add_argument("--dataset", requires=True)
+    parser.add_argument("--nb_epochs", default=50)
+    parser.add_argument("--data_augmentation")
+    parser.add_argument("--train")
+    parser.add_argument("--test")
+    parser.add_argument("--verbose")
 
 if __name__ == "__main__":
     pass

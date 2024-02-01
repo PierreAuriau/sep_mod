@@ -12,7 +12,6 @@ from tqdm import tqdm
 import time
 import pickle
 import json
-from collections import OrderedDict
 
 from sklearn.metrics import roc_auc_score, mean_squared_error, balanced_accuracy_score
 from sklearn.linear_model import LogisticRegression, Ridge
@@ -26,7 +25,6 @@ from torch.cuda.amp import GradScaler, autocast
 from loss import align_loss, uniform_loss, norm, joint_entropy_loss
 from datamanager import TwoModalityDataManager
 from logs import History, setup_logging, save_hyperparameters
-from da_module import DAModule
 from encoder import Encoder
 
 logger = logging.getLogger("StrongEncoder") 
@@ -41,11 +39,12 @@ logger = logging.getLogger("StrongEncoder")
 # - test on continuous labels OK
 # -------------------------------------------------
 # * outputs of models as namedtuple
-# * respect method as Pytorch Lightening
 # - keep weak encoder ?
-# - save hyperparameters --> in main
+# - save hyperparameters --> in main ?
 # - load weak encoder in  init or train/test ?
 # - improve training_step
+# - remove get target by target
+# - iterate over encoder in test (set dico representations instead of z.. and change returns in get embeddings)
 
 class StrongEncoder(object):
     
@@ -93,7 +92,6 @@ class StrongEncoder(object):
         for epoch in range(nb_epochs):
             pbar = tqdm(total=nb_batch, desc=f"Epoch {epoch}")
             self.history.step()
-            
             # train
             self.weak_encoder.eval()
             self.common_encoder.train()
@@ -196,6 +194,7 @@ class StrongEncoder(object):
         self.history = History(name="Test_StrongEncoder", chkpt_dir=self.checkpointdir)
         
         for epoch in list_epochs:
+            logger.info(f"Epoch {epoch}")
             self.load_from_checkpoint(epoch=epoch)
             self.weak_encoder = self.weak_encoder.to(self.device)
             self.specific_encoder = self.specific_encoder.to(self.device)
@@ -228,14 +227,16 @@ class StrongEncoder(object):
                     logger.info(f"{split} set")
                     if split == "test_intra":
                         loader = manager.get_dataloader(test_intra=True)
-                        zw[split], zc[split], zs[split], y[split] = self.get_embeddings(loader=loader.test)
+                        zw[split], zc[split], zs[split] = self.get_embeddings(dataloader=loader.test)
                     else:
-                        zw[split], zc[split], zs[split], y[split] = self.get_embeddings(loader=getattr(loader, split))
+                        zw[split], zc[split], zs[split]= self.get_embeddings(dataloader=getattr(loader, split))
+                    y[split] = manager.dataset[split].get_target()
                 self.save_representations(weak=zw, common=zc, specific=zs, epoch=epoch)
 
             # train predictors
             for i, label in enumerate(labels):
-                if label in ("diagnosis", "sex", "site"):
+                splits = ["train", "validation", "test", "test_intra"]
+                if label in ("diagnosis", "sex"):
                     clf = LogisticRegression(max_iter=1000)
                     clf.get_predictions = clf.predict_proba
                     metrics = {"roc_auc": lambda y_pred, y_true: roc_auc_score(y_score=y_pred[:, 0], y_true=y_true),
@@ -245,10 +246,24 @@ class StrongEncoder(object):
                     clf = Ridge()
                     clf.get_predictions = clf.predict
                     metrics = {"rmse": lambda y_pred, y_true: mean_squared_error(y_pred=y_pred, y_true=y_true, squared=False)}
+                elif label in ("site"):
+                    splits.remove("test") # new sites on external test set
+                    lbl = sorted(manager.dataset[split].all_labels[label].unique())
+                    map_lbl = np.vectorize(lambda pred: {j: l for j,l in enumerate(lbl)}[pred])
+                    clf = LogisticRegression(max_iter=1000)
+                    clf.get_predictions = clf.predict_proba
+                    metrics = {"roc_auc": lambda y_pred, y_true: roc_auc_score(y_score=y_pred, y_true=y_true,
+                                                                               multi_class="ovr", average="macro",
+                                                                               labels=lbl),
+                               "balanced_accuracy": lambda y_pred, y_true: balanced_accuracy_score(y_pred=map_lbl(y_pred.argmax(axis=1)),
+                                                                                                    y_true=y_true)}
                 logger.info(f"Test weak encoder on {label}")
                 clf = clf.fit(zw["train"], y["train"][:, i])
-                for split in ["train", "validation", "test_intra", "test"]:
+                print("y_train[i]", np.unique(y["train"][:, i]))
+                for split in splits:
                     y_pred = clf.get_predictions(zw[split])
+                    print("y_pred shape", y_pred.shape)
+                    print("y[i]", y[split][:, i].shape, np.unique(y[split][:, i]))
                     values = {}
                     for name, metric in metrics.items():
                         values[name] = metric(y_pred=y_pred, y_true=y[split][:, i])
@@ -257,7 +272,7 @@ class StrongEncoder(object):
                 
                 logger.info(f"Test common encoder on {label}")
                 clf = clf.fit(zc["train"], y["train"][:, i])
-                for split in ["train", "validation", "test_intra", "test"]:
+                for split in splits:
                     y_pred = clf.get_predictions(zc[split])
                     values = {}
                     for name, metric in metrics.items():
@@ -267,7 +282,7 @@ class StrongEncoder(object):
 
                 logger.info(f"Test specific encoder on {label}")
                 clf = clf.fit(zs["train"], y["train"][:, i])
-                for split in ["train", "validation", "test_intra", "test"]:
+                for split in splits:
                     y_pred = clf.get_predictions(zs[split])
                     values = {}
                     for name, metric in metrics.items():
@@ -276,11 +291,10 @@ class StrongEncoder(object):
                     self.history.log(epoch=epoch, encoder="specific", label=label, set=split, **values)
             self.history.save()
     
-    def get_embeddings(self, loader):
+    def get_embeddings(self, dataloader):
         weak_representations, common_representations, specific_representations = [], [], [] 
-        labels = []
-        pbar = tqdm(total=len(loader), desc=f"Get embeddings")
-        for dataitem in loader:
+        pbar = tqdm(total=len(dataloader), desc=f"Get embeddings")
+        for dataitem in dataloader:
             pbar.update()
             with torch.no_grad():
                 weak_inputs = dataitem.weak
@@ -291,13 +305,12 @@ class StrongEncoder(object):
             weak_representations.extend(weak_repr.detach().cpu().numpy())
             common_representations.extend(common_repr.detach().cpu().numpy())
             specific_representations.extend(specific_repr.detach().cpu().numpy())
-            labels.extend(dataitem.labels.detach().cpu().numpy())
         pbar.close()
         common_representations = np.asarray(common_representations)
         specific_representations = np.asarray(specific_representations)
         weak_representations = np.asarray(weak_representations)
         labels = np.asarray(labels)
-        return weak_representations, common_representations, specific_representations, labels
+        return weak_representations, common_representations, specific_representations
     
     def save_representations(self, weak, common, specific, epoch):
         representations = {
@@ -333,7 +346,7 @@ if __name__ == "__main__":
     setup_logging(level="debug")
     chkpt = "/neurospin/psy_sbox/analyses/2023_pauriau_sepmod/models/mri/20240122_weak_encoder/exp-weakresnet18scz_ep-49.pth"
     model = StrongEncoder(backbone="resnet18", latent_dim=64, weak_encoder_chkpt=chkpt)
-    model.train(chkpt_dir="/neurospin/psy_sbox/analyses/2023_pauriau_sepmod/models/mri/20240124_strong_encoder",
-               exp_name="resnet18scz", dataset="scz", ponderation=10, nb_epochs=50)
+    #model.train(chkpt_dir="/neurospin/psy_sbox/analyses/2023_pauriau_sepmod/models/mri/20240124_strong_encoder",
+    #           exp_name="resnet18scz", dataset="scz", ponderation=10, nb_epochs=50)
     model.test(chkpt_dir="/neurospin/psy_sbox/analyses/2023_pauriau_sepmod/models/mri/20240124_strong_encoder",
-               exp_name="resnet18scz", dataset="scz", labels=["diagnosis", "age", "sex", "site"], list_epochs=[i for i in range(0, 50, 10)])
+               exp_name="resnet18scz", dataset="scz", labels=["site"], list_epochs=[i for i in range(10, 50, 10)])
