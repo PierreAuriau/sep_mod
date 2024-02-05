@@ -239,7 +239,7 @@ class StrongEncoder(object):
                 if label in ("diagnosis", "sex"):
                     clf = LogisticRegression(max_iter=1000)
                     clf.get_predictions = clf.predict_proba
-                    metrics = {"roc_auc": lambda y_pred, y_true: roc_auc_score(y_score=y_pred[:, 0], y_true=y_true),
+                    metrics = {"roc_auc": lambda y_pred, y_true: roc_auc_score(y_score=y_pred[:, 1], y_true=y_true),
                                "balanced_accuracy": lambda y_pred, y_true : balanced_accuracy_score(y_pred=y_pred.argmax(axis=1),
                                                                                                      y_true=y_true)}
                 elif label in ("age", "tiv"):
@@ -349,4 +349,4 @@ if __name__ == "__main__":
     #model.train(chkpt_dir="/neurospin/psy_sbox/analyses/2023_pauriau_sepmod/models/mri/20240124_strong_encoder",
     #           exp_name="resnet18scz", dataset="scz", ponderation=10, nb_epochs=50)
     model.test(chkpt_dir="/neurospin/psy_sbox/analyses/2023_pauriau_sepmod/models/mri/20240124_strong_encoder",
-               exp_name="resnet18scz", dataset="scz", labels=["site"], list_epochs=[i for i in range(10, 50, 10)])
+               exp_name="resnet18scz", dataset="scz", labels=["diagnosis", "sex", "age", "site"], list_epochs=[i for i in range(10, 50, 10)])
