@@ -82,7 +82,7 @@ class StrongEncoder(object):
         self.checkpointdir = chkpt_dir
         self.exp_name = exp_name
         self.ponderation = ponderation
-        self.history = History(name="Train_StrongEncoder", chkpt_dir=self.checkpointdir)
+        self.history = History(name=f"Train_StrongEncoder_exp-{exp_name}", chkpt_dir=self.checkpointdir)
         
         # train model
         self.weak_encoder = self.weak_encoder.to(self.device)
@@ -118,7 +118,7 @@ class StrongEncoder(object):
             self.history.log(epoch=epoch, train_loss=train_loss, common_loss=common_loss,
                              specific_loss=specific_loss, jem_loss=jem_loss)
             self.history.reduce(reduce_fx="sum")
-            if (epoch % nb_epochs_per_saving == 0 or epoch == nb_epochs-1) and epoch > 0:
+            if (epoch % nb_epochs_per_saving == 0 or epoch == nb_epochs-1):
                 self.history.summary()
                 self.save_checkpoint(
                     epoch=epoch,
@@ -191,7 +191,7 @@ class StrongEncoder(object):
                                            num_workers=8, pin_memory=True)
         self.exp_name = exp_name
         self.checkpointdir = chkpt_dir
-        self.history = History(name="Test_StrongEncoder", chkpt_dir=self.checkpointdir)
+        self.history = History(name=f"Test_StrongEncoder_exp-{exp_name}", chkpt_dir=self.checkpointdir)
         
         for epoch in list_epochs:
             logger.info(f"Epoch {epoch}")
@@ -349,4 +349,4 @@ if __name__ == "__main__":
     #model.train(chkpt_dir="/neurospin/psy_sbox/analyses/2023_pauriau_sepmod/models/mri/20240124_strong_encoder",
     #           exp_name="resnet18scz", dataset="scz", ponderation=10, nb_epochs=50)
     model.test(chkpt_dir="/neurospin/psy_sbox/analyses/2023_pauriau_sepmod/models/mri/20240124_strong_encoder",
-               exp_name="resnet18scz", dataset="scz", labels=["diagnosis", "sex", "age", "site"], list_epochs=[i for i in range(10, 50, 10)])
+               exp_name="resnet18scz", dataset="scz", labels=["diagnosis", "sex", "age", "site"], list_epochs=[i for i in range(10, 50, 10)] + [49])
