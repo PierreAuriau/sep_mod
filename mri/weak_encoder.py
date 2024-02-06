@@ -75,13 +75,13 @@ class WeakEncoder:
             pbar.close()
             self.history.log(epoch=epoch, train_loss=train_loss)
             self.history.reduce(reduce_fx="sum")
-        if (epoch % nb_epochs_per_saving == 0 or epoch == nb_epochs-1):
-            self.history.summary()
-            self.save_checkpoint(epoch=epoch,
-                                 n_embedding=self.n_embedding,
-                                 backbone=self.backbone, 
-                                 optimizer=optimizer.state_dict())
-            self.history.save()
+            if (epoch % nb_epochs_per_saving == 0 or epoch == nb_epochs-1):
+                self.history.summary()
+                self.save_checkpoint(epoch=epoch,
+                                    n_embedding=self.n_embedding,
+                                    backbone=self.backbone, 
+                                    optimizer=optimizer.state_dict())
+                self.history.save()
         logger.info(f"Training duration: {self.history.get_duration()}")
 
     def training_step(self, batch):
@@ -275,7 +275,7 @@ def main(argv):
                     nb_epochs=args.nb_epochs, data_augmentation=args.data_augmentation)
     if args.test:
         model.test(chkpt_dir=args.chkpt_dir, exp_name=args.exp_name, dataset=args.dataset,
-                   labels=args.labels, list_epochs=args.epoch_to_test)
+                   labels=args.labels, list_epochs=args.epochs_to_test)
 
 if __name__ == "__main__":
     main(sys.argv[1:])
