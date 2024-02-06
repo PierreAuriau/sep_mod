@@ -16,7 +16,7 @@ from datasets import SCZDataset, BDDataset, ASDDataset
 from data_augmentation import Normalize
 from da_module import DAModule
 
-logger = logging.getLogger()
+logger = logging.getLogger("datamanager")
 SetItem = namedtuple("SetItem", ["test", "train", "validation"], defaults=(None,) * 3)
 DataItem = namedtuple("DataItem", ["inputs", "labels"])
 TwoViewItem = namedtuple("TwoViewItem", ["view_1", "view_2"])
@@ -35,6 +35,7 @@ class ClinicalDataManager(object):
         self.two_views = two_views
         self.batch_size = batch_size
         self.dataloader_kwargs = dataloader_kwargs
+        self.preproc = preproc
         if isinstance(data_augmentation, str):
             data_augmentation = (data_augmentation, )
         elif data_augmentation is None:
@@ -56,24 +57,25 @@ class ClinicalDataManager(object):
         logger.debug(f"input_transforms : {input_transforms}")        
         self.dataset = dict()
         self.dataset["train"] = dataset_cls(root, preproc=preproc, split="train", two_views=two_views,
-                                             transforms=input_transforms, target=labels)
+                                             transforms=input_transforms, target=self.labels)
         input_transforms = {preproc: self.get_input_transforms(preproc=preproc, data_augmentation=None)}        
         self.dataset["validation"] = dataset_cls(root, preproc=preproc, split="val", two_views=two_views,
-                                                  transforms=input_transforms, target=labels)
+                                                  transforms=input_transforms, target=self.labels)
         self.dataset["test"] = dataset_cls(root, preproc=preproc, split="test",
-                                           transforms=input_transforms, target=labels)
+                                           transforms=input_transforms, target=self.labels)
         self.dataset["test_intra"] = dataset_cls(root, preproc=preproc, split="test_intra", two_views=two_views,
-                                                 transforms=input_transforms, target=labels)
+                                                 transforms=input_transforms, target=self.labels)
             
     @staticmethod
-    def get_collate_fn(two_views=False):
+    def get_collate_fn(preproc, labels, two_views=False):
         if two_views:
             def collate_fn(list_samples):
-                view_1 = torch.stack([torch.tensor(sample[0][0]) for sample in list_samples], dim=0).float()
-                view_2 = torch.stack([torch.tensor(sample[0][1]) for sample in list_samples], dim=0).float()
-                inputs = TwoViewItem(view_1=view_1, view_2=view_2)
-                labels = torch.stack([torch.tensor(sample[1]) for sample in list_samples], dim=0).squeeze().float()
-                return DataItem(inputs=inputs, labels=labels)
+                view_1 = torch.stack([torch.tensor(sample[preproc][0]) for sample in list_samples], dim=0).float()
+                view_2 = torch.stack([torch.tensor(sample[preproc][1]) for sample in list_samples], dim=0).float()
+                dataitem = DataItem(inputs=TwoViewItem(view_1=view_1, view_2=view_2),
+                                    labels=torch.stack([torch.tensor(np.asarray([sample[l] for l in labels])) 
+                                                        for sample in list_samples], dim=0).squeeze().float())
+                return dataitem
         else:
             def collate_fn(list_samples):
                 """ After fetching a list of samples using the indices from sampler,
@@ -85,8 +87,9 @@ class ClinicalDataManager(object):
                 See https://pytorch.org/docs/stable/data.html#dataloader-collate-fn.
                 """
                 data = dict()
-                data["inputs"] = torch.stack([torch.tensor(sample[0]) for sample in list_samples], dim=0).float()
-                data["labels"] = torch.stack([torch.tensor(sample[1]) for sample in list_samples], dim=0).squeeze().float()
+                data["inputs"] = torch.stack([torch.tensor(sample[preproc]) for sample in list_samples], dim=0).float()
+                data["labels"] = torch.stack([torch.tensor(np.asarray([sample[l] for l in labels])) 
+                                              for sample in list_samples], dim=0).squeeze().float()
                 return DataItem(**data)
         return collate_fn
 
@@ -104,7 +107,7 @@ class ClinicalDataManager(object):
         test_loaders = dict()
         for t in tests_to_return:
             dataset = self.dataset[t]
-            collate_fn = self.get_collate_fn(two_views=False)
+            collate_fn = self.get_collate_fn(preproc=self.preproc, labels=self.labels, two_views=False)
             drop_last = True if len(dataset) % self.batch_size == 1 else False
             if drop_last:
                 logger.warning(f"The last subject of the {t} set will not be tested ! "
@@ -123,7 +126,7 @@ class ClinicalDataManager(object):
                 sampler = RandomSampler(dataset)
             logger.info(f"Set {sampler.__class__.__name__} for train dataloader")
             drop_last = True if len(dataset) % self.batch_size == 1 else False
-            collate_fn = self.get_collate_fn(two_views=self.two_views)
+            collate_fn = self.get_collate_fn(preproc=self.preproc, labels=self.labels, two_views=self.two_views)
             _train = DataLoader(
                 dataset, batch_size=self.batch_size, sampler=sampler,
                 collate_fn=collate_fn, drop_last=drop_last,
