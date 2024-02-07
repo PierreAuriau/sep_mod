@@ -100,10 +100,10 @@ class WeakEncoder:
                                       num_workers=8, pin_memory=True)
         self.exp_name = exp_name
         self.checkpointdir = chkpt_dir
-        self.history = History(name=f"Test_StrongEncoder_exp-{exp_name}", chkpt_dir=chkpt_dir)
+        self.history = History(name=f"Test_WeakEncoder_exp-{exp_name}", chkpt_dir=chkpt_dir)
 
         for epoch in list_epochs:
-            self.looad_checkpoint(epoch=epoch)
+            self.load_checkpoint(epoch=epoch)
             self.weak_encoder = self.weak_encoder.to(self.device)        
             self.weak_encoder.eval()
             
@@ -112,7 +112,7 @@ class WeakEncoder:
                                             test=True)
             # get embeddings
             representations = {}
-            label = {}
+            y_true = {}
             filename = os.path.join(self.checkpointdir, self.get_representation_name(epoch=epoch))
             if os.path.exists(filename):
                 with open(filename, "rb") as f:
@@ -120,7 +120,7 @@ class WeakEncoder:
                 logger.info(f"Loading representations : {filename}")
                 for split in ("train", "validation", "test", "test_intra"):
                     representations[split] = saved_repr[split]
-                    label[split] = manager.dataset[split].get_target()
+                    y_true[split] = manager.dataset[split].get_target()
             else:
                 for split in ("train", "validation", "test", "test_intra"):
                     logger.info(f"{split} set")
@@ -129,17 +129,19 @@ class WeakEncoder:
                         representations[split], _ = self.get_embeddings(loader.test)
                     else:
                         representations[split], _ = self.get_embeddings(getattr(loader, split))
-                    label[split] = manager.dataset[split].get_target()
+                    y_true[split] = manager.dataset[split].get_target()
                 self.save_representations(representations=representations, epoch=epoch)
+            for k, v in representations.items():
+                logger.debug(f"Representations {k} set: {v.shape}")
             # train predictors
             for i, label  in enumerate(labels):
                 splits = ["train", "validation", "test", "test_intra"]
                 if label in ("diagnosis", "sex"):
                     clf = LogisticRegression(max_iter=1000)
                     clf.get_predictions = clf.predict_proba
-                    metrics = {"roc_auc": lambda y_pred, y_true: roc_auc_score(y_score=y_pred[:, 0], y_true=y_true),
+                    metrics = {"roc_auc": lambda y_pred, y_true: roc_auc_score(y_score=y_pred[:, 1], y_true=y_true),
                                "balanced_accuracy": lambda y_pred, y_true : balanced_accuracy_score(y_pred=y_pred.argmax(axis=1),
-                                                                                                     y_true=y_true)}
+                                                                                                    y_true=y_true)}
                 elif label in ("age", "tiv"):
                     clf = Ridge()
                     clf.get_predictions = clf.predict
@@ -156,12 +158,14 @@ class WeakEncoder:
                                "balanced_accuracy": lambda y_pred, y_true: balanced_accuracy_score(y_pred=map_lbl(y_pred.argmax(axis=1)),
                                                                                                     y_true=y_true)}
                 logger.info(f"Test weak encoder on {label}")
-                clf = clf.fit(representations["train"], labels["train"][:, i])
+                logger.debug(f"Representations shape : {representations['train'].shape}")
+                logger.debug(f"y_true shape : {y_true['train'][:, i].shape}")
+                clf = clf.fit(representations["train"], y_true["train"][:, i])
                 for split in splits:
                     y_pred = clf.get_predictions(representations[split])
                     values = {}
                     for name, metric in metrics.items():
-                        values[name] = metric(y_pred=y_pred, y_true=labels[split][:, i])
+                        values[name] = metric(y_pred=y_pred, y_true=y_true[split][:, i])
                     self.history.step()
                     self.history.log(epoch=epoch, label=label, set=split, **values)
             self.history.save()
@@ -185,7 +189,7 @@ class WeakEncoder:
         with open(filename, "wb") as f:
             pickle.dump(representations, f)
     
-    def get_representatinon_name(self, epoch):
+    def get_representation_name(self, epoch):
         return f"Representations_WeakEncoder_exp-{self.exp_name}_ep-{epoch}.pkl"
     
     def save_hyperparameters(self, **kwargs):
