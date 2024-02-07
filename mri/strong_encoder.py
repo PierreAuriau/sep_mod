@@ -9,7 +9,6 @@ import argparse
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
-import time
 import pickle
 import json
 
@@ -24,20 +23,12 @@ from torch.cuda.amp import GradScaler, autocast
 # project import
 from loss import align_loss, uniform_loss, norm, joint_entropy_loss
 from datamanager import TwoModalityDataManager
-from logs import History, setup_logging, save_hyperparameters
+from logs import History, setup_logging
 from encoder import Encoder
 
 logger = logging.getLogger("StrongEncoder") 
 
 # UDPATES:
-# - improve test with loops OK
-# - add backbone and latent size to torch.save OK
-# - define optimizers OK
-# - history -> improve it ! OK
-# - logging OK
-# - checckpoint dir, exp name, ponderation --> parameter for train OK
-# - test on continuous labels OK
-# -------------------------------------------------
 # * outputs of models as namedtuple
 # - keep weak encoder ?
 # - save hyperparameters --> in main ?
@@ -45,6 +36,7 @@ logger = logging.getLogger("StrongEncoder")
 # - improve training_step
 # - remove get target by target
 # - iterate over encoder in test (set dico representations instead of z.. and change returns in get embeddings)
+# - rename checkpoint_dir into chkpt_dir
 
 class StrongEncoder(object):
     
@@ -83,7 +75,8 @@ class StrongEncoder(object):
         self.exp_name = exp_name
         self.ponderation = ponderation
         self.history = History(name=f"Train_StrongEncoder_exp-{exp_name}", chkpt_dir=self.checkpointdir)
-        
+        self.save_hyperparameters(dataset=dataset, ponderation=ponderation, nb_epochs=nb_epochs)
+
         # train model
         self.weak_encoder = self.weak_encoder.to(self.device)
         self.specific_encoder = self.specific_encoder.to(self.device)
@@ -154,7 +147,8 @@ class StrongEncoder(object):
         return co_loss, spe_loss, j_loss
 
     def configure_optimizers(self):
-        return Adam(list(self.specific_encoder.parameters()) + list(self.common_encoder.parameters()), lr=1e-4)
+        return Adam(list(self.specific_encoder.parameters()) + list(self.common_encoder.parameters()), 
+                    lr=1e-4, weight_decay=5e-5)
         
     def save_checkpoint(self, epoch, **kwargs):
         outfile = os.path.join(self.checkpointdir, self.get_chkpt_name(epoch))
@@ -309,7 +303,6 @@ class StrongEncoder(object):
         common_representations = np.asarray(common_representations)
         specific_representations = np.asarray(specific_representations)
         weak_representations = np.asarray(weak_representations)
-        labels = np.asarray(labels)
         return weak_representations, common_representations, specific_representations
     
     def save_representations(self, weak, common, specific, epoch):
@@ -319,6 +312,16 @@ class StrongEncoder(object):
             "specific": specific}
         with open(os.path.join(self.checkpointdir, self.get_representation_name(epoch=epoch)), "wb") as f:
             pickle.dump(representations, f)
+    
+    def save_hyperparameters(self, **kwargs):
+        filename = f"StrongEncoder_exp-{self.exp_name}_hyperparameters.json"
+        hyperparameters = {"backbone": self.backbone, "n_embeddings": self.latent_dim,
+                           "weak_encoder_chkpt": self.weak_encoder_chkpt,
+                           "weak_modality": "skeleton", "strong_modality": "vbm",
+                           "bactch_size": 8, "lr": 1e-4, 
+                           "weight_decay": 5e-5, **kwargs}
+        with open(os.path.join(self.checkpointdir, filename), "w") as f:
+            json.dump(hyperparameters, f)
 
     def loss_fn(self, weak_head_1, weak_head_2, common_head_1, 
                 common_head_2, specific_head_1, specific_head_2):
@@ -341,12 +344,67 @@ class StrongEncoder(object):
 
         return common_loss, specific_loss, jem_loss
 
+def parse_args(argv):
+    parser = argparse.ArgumentParser(prog=os.path.basename(__file__),
+                                     description='Train/test strong encoder.')
+    parser.add_argument("--backbone", required=True, choices=["resnet18", "densenet121", "alexnet"],
+                        help="Architecture of the neural network.")
+    parser.add_argument("--latent_dim", required=True, type=int,
+                        help="Dimenseion of the latent space.")
+    parser.add_argument("--weak_encoder_chkpt", required=True, type=str,
+                        help="Path toward weak encoder pretrained model.")
+    parser.add_argument("--chkpt_dir", required=True, type=str,
+                        help="Path to the folder where results and models are saved.") 
+    parser.add_argument("--exp_name", required=True, type=str,
+                        help="Experience name.")
+    parser.add_argument("--dataset", required=True, type=str, choices=["asd", "bd", "scz"],
+                        help="Dataset on which the model is trained.")
+    parser.add_argument("--ponderation", type=float, default=10,
+                        help="Ponderation of the joint entropy minimisation. Default is: 10.")
+    parser.add_argument("--nb_epochs", type=int, default=50,
+                        help="Number of training epochs. Default is 50.")
+    parser.add_argument("--labels", type=str, nargs="+", choices=["diagnosis", "age", "site", "sex", "tiv"],
+                        help="Labels on which the model will be tested.")
+    parser.add_argument("--epochs_to_test", type=int, nargs="+", default=49,
+                        help="Epoch at which the model will be tested.")
+    parser.add_argument("--train", action="store_true",
+                        help="Train model")
+    parser.add_argument("--test", action="store_true",
+                        help="Test the model")
+    parser.add_argument("-v", "--verbose", action="store_true", help="Activate verbosity mode")
+
+    args = parser.parse_args(argv)    
+    return args
+
+def main(argv):
+    args = parse_args(argv)
+
+    # Create saving directory
+    os.makedirs(args.chkpt_dir, exist_ok=True)
+
+    # Setup Logging
+    setup_logging(level="debug" if args.verbose else "info",
+                  logfile=os.path.join(args.chkpt_dir, f"{args.exp_name}.log"))
+    
+    logger.info(f"Checkpoint directory : {args.chkpt_dir}")
+
+    model = StrongEncoder(backbone=args.backbone, latent_dim=args.latent_dim,
+                          weak_encoder_chkpt=args.weak_encoder_chkpt)
+
+    if args.train:
+        model.train(chkpt_dir=args.chkpt_dir, exp_name=args.exp_name, dataset=args.dataset,
+                    ponderation=args.ponderation, nb_epochs=args.nb_epochs)
+    if args.test:
+        model.test(chkpt_dir=args.chkpt_dir, exp_name=args.exp_name, dataset=args.dataset,
+                   labels=args.labels, list_epochs=args.epochs_to_test)
+
     
 if __name__ == "__main__":
-    setup_logging(level="debug")
-    chkpt = "/neurospin/psy_sbox/analyses/2023_pauriau_sepmod/models/mri/20240122_weak_encoder/exp-weakresnet18scz_ep-49.pth"
-    model = StrongEncoder(backbone="resnet18", latent_dim=64, weak_encoder_chkpt=chkpt)
+    main(sys.argv[1:])
+    #setup_logging(level="debug")
+    #chkpt = "/neurospin/psy_sbox/analyses/2023_pauriau_sepmod/models/mri/20240122_weak_encoder/exp-weakresnet18scz_ep-49.pth"
+    #model = StrongEncoder(backbone="resnet18", latent_dim=64, weak_encoder_chkpt=chkpt)
     #model.train(chkpt_dir="/neurospin/psy_sbox/analyses/2023_pauriau_sepmod/models/mri/20240124_strong_encoder",
     #           exp_name="resnet18scz", dataset="scz", ponderation=10, nb_epochs=50)
-    model.test(chkpt_dir="/neurospin/psy_sbox/analyses/2023_pauriau_sepmod/models/mri/20240124_strong_encoder",
-               exp_name="resnet18scz", dataset="scz", labels=["diagnosis", "sex", "age", "site"], list_epochs=[i for i in range(10, 50, 10)] + [49])
+    #model.test(chkpt_dir="/neurospin/psy_sbox/analyses/2023_pauriau_sepmod/models/mri/20240124_strong_encoder",
+    #           exp_name="resnet18scz", dataset="scz", labels=["diagnosis", "sex", "age", "site"], list_epochs=[i for i in range(10, 50, 10)] + [49])
