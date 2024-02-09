@@ -126,7 +126,7 @@ class History(object):
         self.chkpt_dir = chkpt_dir
         self.history = OrderedDict()
         self.current_step = -1
-        self.logger = logging.getLogger(name)
+        self.logger = logging.getLogger("history")
     
     def log(self, **kwargs):
         if self.current_step not in self.history.keys():
