@@ -61,6 +61,9 @@ class Normalize(object):
 
     def __call__(self, arr):
         return self.std * (arr - np.mean(arr))/(np.std(arr) + self.eps) + self.mean
+    
+    def __str__(self):
+        return "Normalize"
 
 
 class Rotation(object):

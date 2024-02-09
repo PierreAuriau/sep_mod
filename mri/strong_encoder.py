@@ -62,13 +62,15 @@ class StrongEncoder(object):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         logger.info(f"Device : {self.device}")
     
-    def train(self, chkpt_dir, exp_name, dataset, ponderation, nb_epochs, nb_epochs_per_saving=10):
+    def train(self, chkpt_dir, exp_name, dataset, ponderation, nb_epochs, 
+              data_augmentation, nb_epochs_per_saving=10):
         
         logger.info(f"Train model: {exp_name} for {nb_epochs} epochs")
         # loader
         manager = TwoModalityDataManager(root="/neurospin/psy_sbox/analyses/2023_pauriau_sepmod/data/root", 
                                          db=dataset, weak_modality="skeleton", strong_modality="vbm",
                                          labels=None, batch_size=8, two_views=True,
+                                         data_augmentation=data_augmentation,
                                          num_workers=8, pin_memory=True)
         loader = manager.get_dataloader(train=True, validation=False)
         nb_batch = len(loader.train)
@@ -80,7 +82,8 @@ class StrongEncoder(object):
         self.exp_name = exp_name
         self.ponderation = ponderation
         self.history = History(name=f"Train_StrongEncoder_exp-{exp_name}", chkpt_dir=self.checkpointdir)
-        self.save_hyperparameters(dataset=dataset, ponderation=ponderation, nb_epochs=nb_epochs)
+        self.save_hyperparameters(dataset=dataset, ponderation=ponderation, nb_epochs=nb_epochs,
+                                  data_augmentation=data_augmentation)
 
         # train model
         self.weak_encoder = self.weak_encoder.to(self.device)
@@ -370,6 +373,8 @@ def parse_args(argv):
                         help="Ponderation of the joint entropy minimisation. Default is: 10.")
     parser.add_argument("--nb_epochs", type=int, default=50,
                         help="Number of training epochs. Default is 50.")
+    parser.add_argument("--data_augmentation", type=str, choices=["cutout", "all_tf"],
+                        help="Apply data augmentations during training.")
     parser.add_argument("--labels", type=str, nargs="+", choices=["diagnosis", "age", "site", "sex", "tiv"],
                         help="Labels on which the model will be tested.")
     parser.add_argument("--epochs_to_test", type=int, nargs="+", default=49,
@@ -400,7 +405,8 @@ def main(argv):
 
     if args.train:
         model.train(chkpt_dir=args.chkpt_dir, exp_name=args.exp_name, dataset=args.dataset,
-                    ponderation=args.ponderation, nb_epochs=args.nb_epochs)
+                    ponderation=args.ponderation, nb_epochs=args.nb_epochs, 
+                    data_augmentation=args.data_augmentation)
     if args.test:
         model.test(chkpt_dir=args.chkpt_dir, exp_name=args.exp_name, dataset=args.dataset,
                    labels=args.labels, list_epochs=args.epochs_to_test)

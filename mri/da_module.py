@@ -11,55 +11,44 @@ logger = logging.getLogger()
 
 
 class DAModule(object):
-    def __init__(self, transforms=("Rotation", "Cutout")):
+    def __init__(self, transforms, preproc):
         self.compose_transforms = Transformer()
-        for t in transforms:
-            if t == "Cutout":
+        if transforms == "cutout":
+            if preproc == "skeleton":
                 self.compose_transforms.register(Cutout(patch_size=0.4, random_size=True, localization="on_data", 
-                                                        min_size=0.1),
-                                                 probability=1)
-            elif t == "Rotation":
-                self.compose_transforms.register(Rotation(angles=5, axes=[(0,1), (0,2), (1,2)], order=0),
-                                                 probability=0.5)
-            elif t == "Crop":
-                self.compose_transforms.register(Crop(np.ceil(0.75*np.array([128]*3)), "random", resize=True),
-                                              probability=1)
-            elif t == "tf_skeleton":
+                                                        image_shape=(128, 160, 128), min_size=0.1),
+                                                probability=1)
+            elif preproc == "vbm":
+                self.compose_transforms.register(Cutout(patch_size=np.ceil(np.array([128]*3)/4), random_size=True, 
+                                                        image_shape=(128, 128, 128)), 
+                                                probability=1)
+        elif transforms == "all_tf":
+            if preproc == "skeleton":
                 self.compose_transforms.register(Flip(), probability=0.5)
                 self.compose_transforms.register(Cutout(patch_size=0.4, random_size=True, localization="on_data", 
                                                         min_size=0.1, image_shape=(128, 160, 128)),
-                                                 probability=1)
-                self.compose_transforms.register(Crop(np.ceil(0.75*np.array([128, 160, 128])), "random", resize=True), probability=0.5)
-                break
-
-            elif t == "tf_vbm":
+                                                probability=1)
+                self.compose_transforms.register(Crop(np.ceil(0.75*np.array([128, 160, 128])), "random", resize=True), 
+                                                 probability=0.5)
+            elif preproc == "vbm":
                 self.compose_transforms.register(Flip(), probability=0.5)
                 self.compose_transforms.register(Blur(sigma=(0.1, 1)), probability=0.5)
                 self.compose_transforms.register(Noise(sigma=(0.1, 1)), probability=0.5)
-                self.compose_transforms.register(Cutout(patch_size=np.ceil(np.array([128]*3)/4), random_size=True, image_shape=(128, 128, 128)), 
+                self.compose_transforms.register(Cutout(patch_size=np.ceil(np.array([128]*3)/4), random_size=True, 
+                                                        image_shape=(128, 128, 128)), 
+                                                probability=0.5)
+                self.compose_transforms.register(Crop(np.ceil(0.75*np.array([128]*3)), "random", resize=True), 
                                                  probability=0.5)
-                self.compose_transforms.register(Crop(np.ceil(0.75*np.array([128]*3)), "random", resize=True), probability=0.5)
-                break
-            elif t == "cutout_skeleton":
-                self.compose_transforms.register(Cutout(patch_size=0.4, random_size=True, localization="on_data", 
-                                                        min_size=0.1),
-                                                 probability=1)
-                break
-            elif t == "cutout_vbm":
-                self.compose_transforms.register(Cutout(patch_size=np.ceil(np.array([128]*3)/4), random_size=True, image_shape=(128, 128, 128)), 
-                                                 probability=1)
-                break
-            elif t == "no":
-                # no da
-                break
-            else:
-                raise ValueError(f"Unknown data augmentation : {t}")
+        elif transforms == "no":
+            pass
+        else:
+            raise ValueError(f"Unknown data augmentation : {transforms}")
 
     def __call__(self, x):
         return self.compose_transforms(x)
 
     def __str__(self):
-        string = "DAModule :\n"
+        string = "DAModule : "
         string += self.compose_transforms.__str__()
         return string
 
@@ -136,7 +125,7 @@ class Transformer(object):
             return '(Empty transformer)'
         s = 'Composition of:'
         for trf in self.transforms:
-            s += '\n\t- ' + trf.__str__()
+            s += f"\n\t- {trf.transform}"
         return s
 
     def __len__(self):

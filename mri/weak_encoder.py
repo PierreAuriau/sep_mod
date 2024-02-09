@@ -38,7 +38,8 @@ class WeakEncoder:
 
     def train(self, chkpt_dir, exp_name, dataset, nb_epochs, 
               data_augmentation, nb_epochs_per_saving=10):
-        
+        logger.info(f"Train model: {exp_name} for {nb_epochs} epochs")
+
         # loader
         manager = ClinicalDataManager(root="/neurospin/psy_sbox/analyses/2023_pauriau_sepmod/data/root", 
                                       db=dataset, preproc="skeleton", labels=None, 
@@ -91,9 +92,16 @@ class WeakEncoder:
             _, weak_head_1 = self.weak_encoder(weak_view_1)
             _, weak_head_2 = self.weak_encoder(weak_view_2)
             loss = self.loss_fn(weak_head_1, weak_head_2)
-        return loss 
+        return loss
+
+    @staticmethod
+    def loss_fn(z_1, z_2):
+        weak_align_loss = align_loss(norm(z_1), norm(z_2))
+        weak_uniform_loss = (uniform_loss(norm(z_1)) + uniform_loss(norm(z_2))) / 2.0
+        return weak_align_loss + weak_uniform_loss 
 
     def test(self, chkpt_dir, exp_name, dataset, labels, list_epochs):
+        logger.info(f"Test model: {exp_name} on {labels}")
         manager = ClinicalDataManager(root="/neurospin/psy_sbox/analyses/2023_pauriau_sepmod/data/root", 
                                       db=dataset, preproc="skeleton", labels=labels, 
                                       batch_size=32, two_views=False,
@@ -197,17 +205,8 @@ class WeakEncoder:
         hyperparameters = {"backbone": self.backbone, "n_embeddings": self.n_embedding,
                            "bactch_size": 32, "preproc": "skeleton", "lr": 1e-4, 
                            "weight_decay": 5e-5, **kwargs}
-        for k,v in hyperparameters.items():
-            logger.debug(f"Key: {k} | type : {type(v)}")
-            logger.debug(f"Value : {v}")
         with open(os.path.join(self.checkpointdir, filename), "w") as f:
             json.dump(hyperparameters, f)
-        
-    @staticmethod
-    def loss_fn(z_1, z_2):
-        weak_align_loss = align_loss(norm(z_1), norm(z_2))
-        weak_uniform_loss = (uniform_loss(norm(z_1)) + uniform_loss(norm(z_2))) / 2.0
-        return weak_align_loss + weak_uniform_loss
     
     def configure_optimizers(self):
         optimizer = Adam(self.weak_encoder.parameters(), lr=1e-4, weight_decay=5e-5)
@@ -244,8 +243,8 @@ def parse_args(argv):
                         help="Dataset on which the model is trained.")
     parser.add_argument("--nb_epochs", type=int, default=50,
                         help="Number of training epochs. Default is 50.")
-    parser.add_argument("--data_augmentation", type=str, default="Cutout", nargs="+",
-                        help="Data augmentation for model training. Default is: Cutout.")
+    parser.add_argument("--data_augmentation", type=str, choices=["all_tf", "cutout"],
+                        help="Apply data augmentations during training.")
     parser.add_argument("--labels", type=str, nargs="+", choices=["diagnosis", "age", "site", "sex", "tiv"],
                         help="Labels on which the model will be tested.")
     parser.add_argument("--epochs_to_test", type=int, nargs="+", default=49,
@@ -268,7 +267,7 @@ def main(argv):
 
     # Setup Logging
     setup_logging(level="debug" if args.verbose else "info",
-                  logfile=os.path.join(args.chkpt_dir, f"{args.exp_name}.log"))
+                  logfile=os.path.join(args.chkpt_dir, f"exp-{args.exp_name}.log"))
     
     logger.info(f"Checkpoint directory : {args.chkpt_dir}")
 
