@@ -32,11 +32,14 @@ logger = logging.getLogger("StrongEncoder")
 # * outputs of models as namedtuple
 # - keep weak encoder ?
 # - save hyperparameters --> in main ?
-# - load weak encoder in  init or train/test ?
+# - load weak encoder in init or train/test ? (save or not weak encoder)
 # - improve training_step
 # - remove get target by target
 # - iterate over encoder in test (set dico representations instead of z.. and change returns in get embeddings)
 # - rename checkpoint_dir into chkpt_dir
+# - data augmentation : change DAModule
+
+# FIXME: WARNING JEM LOSS !!!
 
 class StrongEncoder(object):
     
@@ -60,6 +63,8 @@ class StrongEncoder(object):
         logger.info(f"Device : {self.device}")
     
     def train(self, chkpt_dir, exp_name, dataset, ponderation, nb_epochs, nb_epochs_per_saving=10):
+        
+        logger.info(f"Train model: {exp_name} for {nb_epochs} epochs")
         # loader
         manager = TwoModalityDataManager(root="/neurospin/psy_sbox/analyses/2023_pauriau_sepmod/data/root", 
                                          db=dataset, weak_modality="skeleton", strong_modality="vbm",
@@ -70,7 +75,7 @@ class StrongEncoder(object):
         # define optimizer and scaler
         optimizer = self.configure_optimizers()
         scaler = GradScaler()
-        # prepare attributes
+        # prepare variables
         self.checkpointdir = chkpt_dir
         self.exp_name = exp_name
         self.ponderation = ponderation
@@ -142,42 +147,37 @@ class StrongEncoder(object):
 
             # loss
             co_loss, spe_loss, j_loss = self.loss_fn(weak_head_1, weak_head_2, 
-                                                     specific_head_1, specific_head_2,
-                                                     common_head_1, common_head_2)
+                                                     common_head_1, common_head_2,
+                                                     specific_head_1, specific_head_2)
         return co_loss, spe_loss, j_loss
+    
+    def loss_fn(self, weak_head_1, weak_head_2, common_head_1, 
+                common_head_2, specific_head_1, specific_head_2):
+        # common loss (uniformity and alignement on weak representations)
+        common_align_loss = align_loss(norm(weak_head_1.detach()), norm(common_head_1))
+        common_align_loss +=  align_loss(norm(weak_head_2.detach()), norm(common_head_2))
+        common_align_loss /= 2.0
+        common_uniform_loss = (uniform_loss(norm(common_head_2)) + uniform_loss(norm(common_head_1))) / 2.0
+        common_loss = common_align_loss + common_uniform_loss
 
-    def configure_optimizers(self):
-        return Adam(list(self.specific_encoder.parameters()) + list(self.common_encoder.parameters()), 
-                    lr=1e-4, weight_decay=5e-5)
+        # specific loss (uniformity and alignement)
+        specific_align_loss = align_loss(norm(specific_head_1), norm(specific_head_2))
+        specific_uniform_loss = (uniform_loss(norm(specific_head_2)) + uniform_loss(norm(specific_head_1))) / 2.0
+        specific_loss = specific_align_loss + specific_uniform_loss
+
+        # mi minimization loss between weak and specific representations
+        #logger.warning("JEM LOSS BETWEEN SPECIFIC AND WEAK!")
+        #jem_loss = joint_entropy_loss(norm(specific_head_1), norm(weak_head_1.detach()))
+        #jem_loss = jem_loss + joint_entropy_loss(norm(specific_head_2), norm(weak_head_2.detach()))
+        logger.warning("JEM LOSS BETWEEN SPECIFIC AND COMMON!")
+        jem_loss = joint_entropy_loss(norm(specific_head_1), norm(common_head_1))
+        jem_loss = jem_loss + joint_entropy_loss(norm(specific_head_2), norm(common_head_2))
+        jem_loss = jem_loss / 2.0
+
+        return common_loss, specific_loss, jem_loss
         
-    def save_checkpoint(self, epoch, **kwargs):
-        outfile = os.path.join(self.checkpointdir, self.get_chkpt_name(epoch))
-        torch.save({
-            "epoch": epoch,
-            "weak_encoder": self.weak_encoder.state_dict(),
-            "specific_encoder": self.specific_encoder.state_dict(),
-            "common_encoder": self.common_encoder.state_dict(),
-            **kwargs}, outfile)
-        return outfile
-    
-    def load_from_checkpoint(self, epoch):
-        filename = os.path.join(self.checkpointdir, self.get_chkpt_name(epoch))
-        checkpoint = torch.load(filename)
-        status = self.weak_encoder.load_state_dict(checkpoint["weak_encoder"], strict=False)
-        logger.info(f"Loading weak encoder : {status}")
-        status = self.specific_encoder.load_state_dict(checkpoint["specific_encoder"], strict=False)
-        logger.info(f"Loading specific encoder : {status}")
-        status = self.common_encoder.load_state_dict(checkpoint["common_encoder"], strict=False)
-        logger.info(f"Loading common encoder : {status}")
-
-    def get_chkpt_name(self, epoch):
-        return f"StrongEncoder_exp-{self.exp_name}_ep-{epoch}.pth"
-    
-    def get_representation_name(self, epoch):
-        return f"Representations_StrongEncoder_exp-{self.exp_name}_ep-{epoch}.pkl"
-    
     def test(self, chkpt_dir, exp_name, dataset, labels, list_epochs):
-        
+        logger.info(f"Test model: {exp_name} on {labels}")
         # datamanagers
         manager = TwoModalityDataManager(root="/neurospin/psy_sbox/analyses/2023_pauriau_sepmod/data/root", 
                                            db=dataset, strong_modality="vbm", weak_modality="skeleton", 
@@ -253,11 +253,8 @@ class StrongEncoder(object):
                                                                                                     y_true=y_true)}
                 logger.info(f"Test weak encoder on {label}")
                 clf = clf.fit(zw["train"], y["train"][:, i])
-                print("y_train[i]", np.unique(y["train"][:, i]))
                 for split in splits:
                     y_pred = clf.get_predictions(zw[split])
-                    print("y_pred shape", y_pred.shape)
-                    print("y[i]", y[split][:, i].shape, np.unique(y[split][:, i]))
                     values = {}
                     for name, metric in metrics.items():
                         values[name] = metric(y_pred=y_pred, y_true=y[split][:, i])
@@ -305,6 +302,36 @@ class StrongEncoder(object):
         weak_representations = np.asarray(weak_representations)
         return weak_representations, common_representations, specific_representations
     
+    def configure_optimizers(self):
+        return Adam(list(self.specific_encoder.parameters()) + list(self.common_encoder.parameters()), 
+                    lr=1e-4, weight_decay=5e-5)
+        
+    def save_checkpoint(self, epoch, **kwargs):
+        outfile = os.path.join(self.checkpointdir, self.get_chkpt_name(epoch))
+        torch.save({
+            "epoch": epoch,
+            "weak_encoder": self.weak_encoder.state_dict(),
+            "specific_encoder": self.specific_encoder.state_dict(),
+            "common_encoder": self.common_encoder.state_dict(),
+            **kwargs}, outfile)
+        return outfile
+    
+    def load_from_checkpoint(self, epoch):
+        filename = os.path.join(self.checkpointdir, self.get_chkpt_name(epoch))
+        checkpoint = torch.load(filename)
+        status = self.weak_encoder.load_state_dict(checkpoint["weak_encoder"], strict=False)
+        logger.info(f"Loading weak encoder : {status}")
+        status = self.specific_encoder.load_state_dict(checkpoint["specific_encoder"], strict=False)
+        logger.info(f"Loading specific encoder : {status}")
+        status = self.common_encoder.load_state_dict(checkpoint["common_encoder"], strict=False)
+        logger.info(f"Loading common encoder : {status}")
+
+    def get_chkpt_name(self, epoch):
+        return f"StrongEncoder_exp-{self.exp_name}_ep-{epoch}.pth"
+    
+    def get_representation_name(self, epoch):
+        return f"Representations_StrongEncoder_exp-{self.exp_name}_ep-{epoch}.pkl"
+    
     def save_representations(self, weak, common, specific, epoch):
         representations = {
             "weak": weak,
@@ -323,26 +350,6 @@ class StrongEncoder(object):
         with open(os.path.join(self.checkpointdir, filename), "w") as f:
             json.dump(hyperparameters, f)
 
-    def loss_fn(self, weak_head_1, weak_head_2, common_head_1, 
-                common_head_2, specific_head_1, specific_head_2):
-        # common loss (uniformity and alignement on weak representations)
-        common_align_loss = align_loss(norm(weak_head_1.detach()), norm(common_head_1))
-        common_align_loss +=  align_loss(norm(weak_head_2.detach()), norm(common_head_2))
-        common_align_loss /= 2.0
-        common_uniform_loss = (uniform_loss(norm(common_head_2)) + uniform_loss(norm(common_head_1))) / 2.0
-        common_loss = common_align_loss + common_uniform_loss
-
-        # specific loss (uniformity and alignement)
-        specific_align_loss = align_loss(norm(specific_head_1), norm(specific_head_2))
-        specific_uniform_loss = (uniform_loss(norm(specific_head_2)) + uniform_loss(norm(specific_head_1))) / 2.0
-        specific_loss = specific_align_loss + specific_uniform_loss
-
-        # mi minimization loss between weak and specific representations
-        jem_loss = joint_entropy_loss(norm(specific_head_1), norm(weak_head_1.detach()))
-        jem_loss = jem_loss + joint_entropy_loss(norm(specific_head_2), norm(weak_head_2.detach()))
-        jem_loss = jem_loss / 2.0
-
-        return common_loss, specific_loss, jem_loss
 
 def parse_args(argv):
     parser = argparse.ArgumentParser(prog=os.path.basename(__file__),
@@ -384,7 +391,7 @@ def main(argv):
 
     # Setup Logging
     setup_logging(level="debug" if args.verbose else "info",
-                  logfile=os.path.join(args.chkpt_dir, f"{args.exp_name}.log"))
+                  logfile=os.path.join(args.chkpt_dir, f"exp-{args.exp_name}.log"))
     
     logger.info(f"Checkpoint directory : {args.chkpt_dir}")
 
