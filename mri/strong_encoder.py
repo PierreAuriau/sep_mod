@@ -29,17 +29,18 @@ from encoder import Encoder
 logger = logging.getLogger("StrongEncoder") 
 
 # UDPATES:
+# - data augmentation : change DAModule OK
+# - save hyperparameters --> in main ? OK
+# ----------------------------------------
 # * outputs of models as namedtuple
 # - keep weak encoder ?
-# - save hyperparameters --> in main ?
 # - load weak encoder in init or train/test ? (save or not weak encoder)
 # - improve training_step
+# - improve test step : iterate over encoder in test (set dico representations instead of z.. and change returns in get embeddings)
 # - remove get target by target
-# - iterate over encoder in test (set dico representations instead of z.. and change returns in get embeddings)
 # - rename checkpoint_dir into chkpt_dir
-# - data augmentation : change DAModule
 
-# FIXME: WARNING JEM LOSS !!!
+
 
 class StrongEncoder(object):
     
@@ -63,7 +64,7 @@ class StrongEncoder(object):
         logger.info(f"Device : {self.device}")
     
     def train(self, chkpt_dir, exp_name, dataset, ponderation, nb_epochs, 
-              data_augmentation, nb_epochs_per_saving=10):
+              data_augmentation, jem_loss_config, nb_epochs_per_saving=10):
         
         logger.info(f"Train model: {exp_name} for {nb_epochs} epochs")
         # loader
@@ -81,9 +82,11 @@ class StrongEncoder(object):
         self.checkpointdir = chkpt_dir
         self.exp_name = exp_name
         self.ponderation = ponderation
+        self.jem_loss_config = jem_loss_config
+        logger.debug(f"jem loss config {jem_loss_config}")
         self.history = History(name=f"Train_StrongEncoder_exp-{exp_name}", chkpt_dir=self.checkpointdir)
         self.save_hyperparameters(dataset=dataset, ponderation=ponderation, nb_epochs=nb_epochs,
-                                  data_augmentation=data_augmentation)
+                                  data_augmentation=data_augmentation, jem_loss_config=jem_loss_config)
 
         # train model
         self.weak_encoder = self.weak_encoder.to(self.device)
@@ -169,13 +172,15 @@ class StrongEncoder(object):
         specific_loss = specific_align_loss + specific_uniform_loss
 
         # mi minimization loss between weak and specific representations
-        #logger.warning("JEM LOSS BETWEEN SPECIFIC AND WEAK!")
-        #jem_loss = joint_entropy_loss(norm(specific_head_1), norm(weak_head_1.detach()))
-        #jem_loss = jem_loss + joint_entropy_loss(norm(specific_head_2), norm(weak_head_2.detach()))
-        logger.warning("JEM LOSS BETWEEN SPECIFIC AND COMMON!")
-        jem_loss = joint_entropy_loss(norm(specific_head_1), norm(common_head_1))
-        jem_loss = jem_loss + joint_entropy_loss(norm(specific_head_2), norm(common_head_2))
-        jem_loss = jem_loss / 2.0
+        if self.jem_loss_config == "specific-weak":
+            #logger.warning("JEM LOSS BETWEEN SPECIFIC AND WEAK!")
+            jem_loss = joint_entropy_loss(norm(specific_head_1), norm(weak_head_1.detach()))
+            jem_loss = jem_loss + joint_entropy_loss(norm(specific_head_2), norm(weak_head_2.detach()))
+        elif self.jem_loss_config == "specific-common":
+            #logger.warning("JEM LOSS BETWEEN SPECIFIC AND COMMON!")
+            jem_loss = joint_entropy_loss(norm(specific_head_1), norm(common_head_1))
+            jem_loss = jem_loss + joint_entropy_loss(norm(specific_head_2), norm(common_head_2))
+            jem_loss = jem_loss / 2.0
 
         return common_loss, specific_loss, jem_loss
         
@@ -330,10 +335,10 @@ class StrongEncoder(object):
         logger.info(f"Loading common encoder : {status}")
 
     def get_chkpt_name(self, epoch):
-        return f"StrongEncoder_exp-{self.exp_name}_ep-{epoch}.pth"
+        return f"StrongEncoder_exp-{self.exp_name}_epoch-{epoch}.pth"
     
     def get_representation_name(self, epoch):
-        return f"Representations_StrongEncoder_exp-{self.exp_name}_ep-{epoch}.pkl"
+        return f"Representations_StrongEncoder_exp-{self.exp_name}_epoch-{epoch}.pkl"
     
     def save_representations(self, weak, common, specific, epoch):
         representations = {
@@ -371,6 +376,8 @@ def parse_args(argv):
                         help="Dataset on which the model is trained.")
     parser.add_argument("--ponderation", type=float, default=10,
                         help="Ponderation of the joint entropy minimisation. Default is: 10.")
+    parser.add_argument("--jem_loss_config", type=str, default="specific-common", choices=["specific-common", "specific-weak"],
+                        help="Representations between which the jem loss is computed. Default is: specific-common.")
     parser.add_argument("--nb_epochs", type=int, default=50,
                         help="Number of training epochs. Default is 50.")
     parser.add_argument("--data_augmentation", type=str, choices=["cutout", "all_tf"],
@@ -405,8 +412,8 @@ def main(argv):
 
     if args.train:
         model.train(chkpt_dir=args.chkpt_dir, exp_name=args.exp_name, dataset=args.dataset,
-                    ponderation=args.ponderation, nb_epochs=args.nb_epochs, 
-                    data_augmentation=args.data_augmentation)
+                    ponderation=args.ponderation, jem_loss_config=args.jem_loss_config,
+                    nb_epochs=args.nb_epochs, data_augmentation=args.data_augmentation)
     if args.test:
         model.test(chkpt_dir=args.chkpt_dir, exp_name=args.exp_name, dataset=args.dataset,
                    labels=args.labels, list_epochs=args.epochs_to_test)
