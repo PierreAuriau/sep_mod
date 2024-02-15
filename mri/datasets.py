@@ -378,7 +378,7 @@ class BDDataset(ClinicalBase):
                     site=self._site_mapping)
 
     def _check_integrity(self):
-        return super()._check_integrity() & os.path.isfile(os.path.join(self.root, "mapping_site_name-class_bip.pkl"))
+        return super()._check_integrity() & os.path.isfile(os.path.join(self.root, "mapping_site_name-class_bd.pkl"))
 
     def __init__(self, root: str, *args, **kwargs):
         self._site_mapping = self.load_pickle(os.path.join(root, "mapping_site_name-class_bip.pkl"))
