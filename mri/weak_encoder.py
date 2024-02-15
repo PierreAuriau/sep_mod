@@ -51,7 +51,7 @@ class WeakEncoder:
         optimizer = self.configure_optimizers()
         scaler = GradScaler()
         # prepare attributes
-        self.checkpointdir = chkpt_dir
+        self.chkpt_dir = chkpt_dir
         self.exp_name = exp_name
         self.history = History(name=f"Train_WeakEncoder_exp-{exp_name}", chkpt_dir=chkpt_dir)
         self.save_hyperparameters(nb_epochs=nb_epochs, dataset=dataset, data_augmentation=data_augmentation)
@@ -107,7 +107,7 @@ class WeakEncoder:
                                       batch_size=32, two_views=False,
                                       num_workers=8, pin_memory=True)
         self.exp_name = exp_name
-        self.checkpointdir = chkpt_dir
+        self.chkpt_dir = chkpt_dir
         self.history = History(name=f"Test_WeakEncoder_exp-{exp_name}", chkpt_dir=chkpt_dir)
 
         for epoch in list_epochs:
@@ -121,14 +121,14 @@ class WeakEncoder:
             # get embeddings
             representations = {}
             y_true = {}
-            filename = os.path.join(self.checkpointdir, self.get_representation_name(epoch=epoch))
+            filename = os.path.join(self.chkpt_dir, self.get_representation_name(epoch=epoch))
             if os.path.exists(filename):
                 with open(filename, "rb") as f:
                     saved_repr = pickle.load(f)
                 logger.info(f"Loading representations : {filename}")
                 for split in ("train", "validation", "test", "test_intra"):
                     representations[split] = saved_repr[split]
-                    y_true[split] = manager.dataset[split].get_target()
+                    y_true[split] = manager.dataset[split].target
             else:
                 for split in ("train", "validation", "test", "test_intra"):
                     logger.info(f"{split} set")
@@ -137,7 +137,7 @@ class WeakEncoder:
                         representations[split], _ = self.get_embeddings(loader.test)
                     else:
                         representations[split], _ = self.get_embeddings(getattr(loader, split))
-                    y_true[split] = manager.dataset[split].get_target()
+                    y_true[split] = manager.dataset[split].target
                 self.save_representations(representations=representations, epoch=epoch)
             for k, v in representations.items():
                 logger.debug(f"Representations {k} set: {v.shape}")
@@ -193,19 +193,19 @@ class WeakEncoder:
         return np.asarray(representations), np.asarray(heads)
     
     def save_representations(self, representations, epoch):
-        filename = os.path.join(self.checkpointdir, self.get_representation_name(epoch=epoch))
+        filename = os.path.join(self.chkpt_dir, self.get_representation_name(epoch=epoch))
         with open(filename, "wb") as f:
             pickle.dump(representations, f)
     
     def get_representation_name(self, epoch):
-        return f"Representations_WeakEncoder_exp-{self.exp_name}_ep-{epoch}.pkl"
+        return f"Representations_WeakEncoder_exp-{self.exp_name}_epoch-{epoch}.pkl"
     
     def save_hyperparameters(self, **kwargs):
         filename = f"WeakEncoder_exp-{self.exp_name}_hyperparameters.json"
         hyperparameters = {"backbone": self.backbone, "n_embeddings": self.n_embedding,
                            "bactch_size": 32, "preproc": "skeleton", "lr": 1e-4, 
                            "weight_decay": 5e-5, **kwargs}
-        with open(os.path.join(self.checkpointdir, filename), "w") as f:
+        with open(os.path.join(self.chkpt_dir, filename), "w") as f:
             json.dump(hyperparameters, f)
     
     def configure_optimizers(self):
@@ -213,20 +213,20 @@ class WeakEncoder:
         return optimizer
     
     def save_checkpoint(self, epoch, **kwargs):
-        outfile = os.path.join(self.checkpointdir, self.get_chkpt_name(epoch))
+        outfile = os.path.join(self.chkpt_dir, self.get_chkpt_name(epoch))
         torch.save({
             "epoch": epoch,
             "weak_encoder": self.weak_encoder.state_dict(),
             **kwargs}, outfile)
     
     def load_checkpoint(self, epoch):
-        checkpoint = torch.load(os.path.join(self.checkpointdir, 
+        checkpoint = torch.load(os.path.join(self.chkpt_dir, 
                                              self.get_chkpt_name(epoch=epoch)))
         status = self.weak_encoder.load_state_dict(checkpoint["weak_encoder"], strict=False)
         logger.info(f"Loading weak encoder: {status}")
     
     def get_chkpt_name(self, epoch):
-        return f"WeakEncoder_exp-{self.exp_name}_ep-{epoch}.pth"
+        return f"WeakEncoder_exp-{self.exp_name}_epoch-{epoch}.pth"
 
 
 def parse_args(argv):
