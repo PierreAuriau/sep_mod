@@ -22,7 +22,7 @@ from torch.cuda.amp import GradScaler, autocast
 
 # project import
 from loss import align_loss, uniform_loss, norm, joint_entropy_loss
-from datamanager import TwoModalityDataManager
+from datamanager import TwoModalityDataManager, TwoViewItem
 from logs import History, setup_logging
 from encoder import Encoder
 
@@ -31,15 +31,13 @@ logger = logging.getLogger("StrongEncoder")
 # UDPATES:
 # - data augmentation : change DAModule OK
 # - save hyperparameters --> in main ? OK
+# - improve test step : iterate over encoder in test (set dico representations instead of z.. and change returns in get embeddings) OK
+# - remove get target by target OK
+# - rename checkpoint_dir into chkpt_dir OK 
 # ----------------------------------------
-# * outputs of models as namedtuple
-# - keep weak encoder ?
-# - load weak encoder in init or train/test ? (save or not weak encoder)
-# - improve training_step
-# - improve test step : iterate over encoder in test (set dico representations instead of z.. and change returns in get embeddings)
-# - remove get target by target
-# - rename checkpoint_dir into chkpt_dir
-
+# * outputs of models as namedtuple or dict, or parameter in forward or init
+# - improve training_step : add epoch attributes to log
+# - keep weak encoder ? load weak encoder in init or train/test ? (save or not weak encoder)
 
 
 class StrongEncoder(object):
@@ -79,12 +77,12 @@ class StrongEncoder(object):
         optimizer = self.configure_optimizers()
         scaler = GradScaler()
         # prepare variables
-        self.checkpointdir = chkpt_dir
+        self.chkpdt_dir = chkpt_dir
         self.exp_name = exp_name
         self.ponderation = ponderation
         self.jem_loss_config = jem_loss_config
         logger.debug(f"jem loss config {jem_loss_config}")
-        self.history = History(name=f"Train_StrongEncoder_exp-{exp_name}", chkpt_dir=self.checkpointdir)
+        self.history = History(name=f"Train_StrongEncoder_exp-{exp_name}", chkpt_dir=self.chkpdt_dir)
         self.save_hyperparameters(dataset=dataset, ponderation=ponderation, nb_epochs=nb_epochs,
                                   data_augmentation=data_augmentation, jem_loss_config=jem_loss_config)
 
@@ -144,44 +142,46 @@ class StrongEncoder(object):
         
         with autocast():
             with torch.no_grad():
-                _, weak_head_1 = self.weak_encoder(weak_view_1)
-                _, weak_head_2 = self.weak_encoder(weak_view_2)
-            _, specific_head_1 = self.specific_encoder(strong_view_1)
-            _, specific_head_2 = self.specific_encoder(strong_view_2)
-            _, common_head_1 = self.common_encoder(strong_view_1)
-            _, common_head_2 = self.common_encoder(strong_view_2)
+                weak_head = TwoViewItem(
+                    view_1=self.weak_encoder(weak_view_1)[1],
+                    view_2=self.weak_encoder(weak_view_2)[1])
+            specific_head = TwoViewItem(
+                view_1=self.specific_encoder(strong_view_1)[1],
+                view_2=self.specific_encoder(strong_view_2)[1])
+            common_head = TwoViewItem(
+                view_1=self.common_encoder(strong_view_1)[1],
+                view_2=self.common_encoder(strong_view_2)[1])
 
             # loss
-            co_loss, spe_loss, j_loss = self.loss_fn(weak_head_1, weak_head_2, 
-                                                     common_head_1, common_head_2,
-                                                     specific_head_1, specific_head_2)
+            co_loss, spe_loss, j_loss = self.loss_fn(weak_head=weak_head, 
+                                                     common_head=common_head, 
+                                                     specific_head=specific_head)
         return co_loss, spe_loss, j_loss
     
-    def loss_fn(self, weak_head_1, weak_head_2, common_head_1, 
-                common_head_2, specific_head_1, specific_head_2):
+    def loss_fn(self, weak_head, common_head, specific_head):
         # common loss (uniformity and alignement on weak representations)
-        common_align_loss = align_loss(norm(weak_head_1.detach()), norm(common_head_1))
-        common_align_loss +=  align_loss(norm(weak_head_2.detach()), norm(common_head_2))
+        common_align_loss = align_loss(norm(weak_head.view_1.detach()), norm(common_head.view_1))
+        common_align_loss +=  align_loss(norm(weak_head.view_2.detach()), norm(common_head.view_2))
         common_align_loss /= 2.0
-        common_uniform_loss = (uniform_loss(norm(common_head_2)) + uniform_loss(norm(common_head_1))) / 2.0
+        common_uniform_loss = (uniform_loss(norm(common_head.view_2)) + uniform_loss(norm(common_head.view_1))) / 2.0
         common_loss = common_align_loss + common_uniform_loss
 
         # specific loss (uniformity and alignement)
-        specific_align_loss = align_loss(norm(specific_head_1), norm(specific_head_2))
-        specific_uniform_loss = (uniform_loss(norm(specific_head_2)) + uniform_loss(norm(specific_head_1))) / 2.0
+        specific_align_loss = align_loss(norm(specific_head.view_1), norm(specific_head.view_2))
+        specific_uniform_loss = (uniform_loss(norm(specific_head.view_2)) + uniform_loss(norm(specific_head.view_1))) / 2.0
         specific_loss = specific_align_loss + specific_uniform_loss
 
         # mi minimization loss between weak and specific representations
         if self.jem_loss_config == "specific-weak":
             #logger.warning("JEM LOSS BETWEEN SPECIFIC AND WEAK!")
-            jem_loss = joint_entropy_loss(norm(specific_head_1), norm(weak_head_1.detach()))
-            jem_loss = jem_loss + joint_entropy_loss(norm(specific_head_2), norm(weak_head_2.detach()))
+            jem_loss = joint_entropy_loss(norm(specific_head.view_1), norm(weak_head.view_1.detach()))
+            jem_loss = jem_loss + joint_entropy_loss(norm(specific_head.view_2), norm(weak_head.view_2.detach()))
         elif self.jem_loss_config == "specific-common":
             #logger.warning("JEM LOSS BETWEEN SPECIFIC AND COMMON!")
-            jem_loss = joint_entropy_loss(norm(specific_head_1), norm(common_head_1))
-            jem_loss = jem_loss + joint_entropy_loss(norm(specific_head_2), norm(common_head_2))
+            jem_loss = joint_entropy_loss(norm(specific_head.view_1), norm(common_head.view_1))
+            jem_loss = jem_loss + joint_entropy_loss(norm(specific_head.view_2), norm(common_head.view_2))
             jem_loss = jem_loss / 2.0
-
+                
         return common_loss, specific_loss, jem_loss
         
     def test(self, chkpt_dir, exp_name, dataset, labels, list_epochs):
@@ -192,8 +192,8 @@ class StrongEncoder(object):
                                            labels=labels, batch_size=8, two_views=False,
                                            num_workers=8, pin_memory=True)
         self.exp_name = exp_name
-        self.checkpointdir = chkpt_dir
-        self.history = History(name=f"Test_StrongEncoder_exp-{exp_name}", chkpt_dir=self.checkpointdir)
+        self.chkpdt_dir = chkpt_dir
+        self.history = History(name=f"Test_StrongEncoder_exp-{exp_name}", chkpt_dir=self.chkpdt_dir)
         
         for epoch in list_epochs:
             logger.info(f"Epoch {epoch}")
@@ -210,30 +210,30 @@ class StrongEncoder(object):
                                             validation=True,
                                             test=True)
             # get embeddings
-            zw = {} # weak representations
-            zc =  {} # common representations
-            zs = {} # specific representations
-            y = {} # labels
-            filename = os.path.join(self.checkpointdir, self.get_representation_name(epoch=epoch))
+            representations = {} # representations
+            y_true = {} # ground truth labels
+            filename = os.path.join(self.chkpdt_dir, self.get_representation_name(epoch=epoch))
             if os.path.exists(filename):
                 with open(filename, "rb") as f:
-                    representations = pickle.load(f)
+                    saved_repr = pickle.load(f)
                 logger.info(f"Loading representations : {filename}")
+                representations = saved_repr
                 for split in ("train", "validation", "test", "test_intra"):
-                    zw[split] = representations["weak"][split]
-                    zc[split] = representations["common"][split]
-                    zs[split] = representations["specific"][split]
-                    y[split] = manager.dataset[split].get_target()
+                    y_true[split] = manager.dataset[split].target
             else:
                 for split in ("train", "validation", "test", "test_intra"):
                     logger.info(f"{split} set")
                     if split == "test_intra":
                         loader = manager.get_dataloader(test_intra=True)
-                        zw[split], zc[split], zs[split] = self.get_embeddings(dataloader=loader.test)
+                        embeddings = self.get_embeddings(dataloader=loader.test)
+                        for enc, repr in embeddings.items():
+                            representations[enc][split] = repr 
                     else:
-                        zw[split], zc[split], zs[split]= self.get_embeddings(dataloader=getattr(loader, split))
-                    y[split] = manager.dataset[split].get_target()
-                self.save_representations(weak=zw, common=zc, specific=zs, epoch=epoch)
+                        embeddings = self.get_embeddings(dataloader=getattr(loader, split))
+                        for enc, repr in embeddings.items():
+                            representations[enc][split] = repr
+                    y_true[split] = manager.dataset[split].target
+                self.save_representations(representatinos=representations, epoch=epoch)
 
             # train predictors
             for i, label in enumerate(labels):
@@ -259,35 +259,16 @@ class StrongEncoder(object):
                                                                                labels=lbl),
                                "balanced_accuracy": lambda y_pred, y_true: balanced_accuracy_score(y_pred=map_lbl(y_pred.argmax(axis=1)),
                                                                                                     y_true=y_true)}
-                logger.info(f"Test weak encoder on {label}")
-                clf = clf.fit(zw["train"], y["train"][:, i])
-                for split in splits:
-                    y_pred = clf.get_predictions(zw[split])
-                    values = {}
-                    for name, metric in metrics.items():
-                        values[name] = metric(y_pred=y_pred, y_true=y[split][:, i])
-                    self.history.step()
-                    self.history.log(epoch=epoch, encoder="weak", label=label, set=split, **values)
-                
-                logger.info(f"Test common encoder on {label}")
-                clf = clf.fit(zc["train"], y["train"][:, i])
-                for split in splits:
-                    y_pred = clf.get_predictions(zc[split])
-                    values = {}
-                    for name, metric in metrics.items():
-                        values[name] = metric(y_pred=y_pred, y_true=y[split][:, i])
-                    self.history.step()
-                    self.history.log(epoch=epoch, encoder="common", label=label, set=split, **values)
-
-                logger.info(f"Test specific encoder on {label}")
-                clf = clf.fit(zs["train"], y["train"][:, i])
-                for split in splits:
-                    y_pred = clf.get_predictions(zs[split])
-                    values = {}
-                    for name, metric in metrics.items():
-                        values[name] = metric(y_pred=y_pred, y_true=y[split][:, i])
-                    self.history.step()
-                    self.history.log(epoch=epoch, encoder="specific", label=label, set=split, **values)
+                for encoder in ("weak", "common", "specific"):
+                    logger.info(f"Test {encoder} encoder on {label}")
+                    clf = clf.fit(representations[encoder]["train"], y_true["train"][:, i])
+                    for split in splits:
+                        y_pred = clf.get_predictions(representations[encoder][split])
+                        values = {}
+                        for name, metric in metrics.items():
+                            values[name] = metric(y_pred=y_pred, y_true=y_true[split][:, i])
+                        self.history.step()
+                        self.history.log(epoch=epoch, encoder=encoder, label=label, set=split, **values)
             self.history.save()
     
     def get_embeddings(self, dataloader):
@@ -305,17 +286,17 @@ class StrongEncoder(object):
             common_representations.extend(common_repr.detach().cpu().numpy())
             specific_representations.extend(specific_repr.detach().cpu().numpy())
         pbar.close()
-        common_representations = np.asarray(common_representations)
-        specific_representations = np.asarray(specific_representations)
-        weak_representations = np.asarray(weak_representations)
-        return weak_representations, common_representations, specific_representations
+        representations = {"common": np.asarray(common_representations),
+                           "specific": np.asarray(specific_representations),
+                           "weak": np.asarray(weak_representations)}
+        return representations
     
     def configure_optimizers(self):
         return Adam(list(self.specific_encoder.parameters()) + list(self.common_encoder.parameters()), 
                     lr=1e-4, weight_decay=5e-5)
         
     def save_checkpoint(self, epoch, **kwargs):
-        outfile = os.path.join(self.checkpointdir, self.get_chkpt_name(epoch))
+        outfile = os.path.join(self.chkpdt_dir, self.get_chkpt_name(epoch))
         torch.save({
             "epoch": epoch,
             "weak_encoder": self.weak_encoder.state_dict(),
@@ -325,7 +306,7 @@ class StrongEncoder(object):
         return outfile
     
     def load_from_checkpoint(self, epoch):
-        filename = os.path.join(self.checkpointdir, self.get_chkpt_name(epoch))
+        filename = os.path.join(self.chkpdt_dir, self.get_chkpt_name(epoch))
         checkpoint = torch.load(filename)
         status = self.weak_encoder.load_state_dict(checkpoint["weak_encoder"], strict=False)
         logger.info(f"Loading weak encoder : {status}")
@@ -340,12 +321,8 @@ class StrongEncoder(object):
     def get_representation_name(self, epoch):
         return f"Representations_StrongEncoder_exp-{self.exp_name}_epoch-{epoch}.pkl"
     
-    def save_representations(self, weak, common, specific, epoch):
-        representations = {
-            "weak": weak,
-            "common": common,
-            "specific": specific}
-        with open(os.path.join(self.checkpointdir, self.get_representation_name(epoch=epoch)), "wb") as f:
+    def save_representations(self, representations, epoch):
+        with open(os.path.join(self.chkpdt_dir, self.get_representation_name(epoch=epoch)), "wb") as f:
             pickle.dump(representations, f)
     
     def save_hyperparameters(self, **kwargs):
@@ -355,7 +332,7 @@ class StrongEncoder(object):
                            "weak_modality": "skeleton", "strong_modality": "vbm",
                            "bactch_size": 8, "lr": 1e-4, 
                            "weight_decay": 5e-5, **kwargs}
-        with open(os.path.join(self.checkpointdir, filename), "w") as f:
+        with open(os.path.join(self.chkpdt_dir, filename), "w") as f:
             json.dump(hyperparameters, f)
 
 
@@ -421,10 +398,3 @@ def main(argv):
     
 if __name__ == "__main__":
     main(sys.argv[1:])
-    #setup_logging(level="debug")
-    #chkpt = "/neurospin/psy_sbox/analyses/2023_pauriau_sepmod/models/mri/20240122_weak_encoder/exp-weakresnet18scz_ep-49.pth"
-    #model = StrongEncoder(backbone="resnet18", latent_dim=64, weak_encoder_chkpt=chkpt)
-    #model.train(chkpt_dir="/neurospin/psy_sbox/analyses/2023_pauriau_sepmod/models/mri/20240124_strong_encoder",
-    #           exp_name="resnet18scz", dataset="scz", ponderation=10, nb_epochs=50)
-    #model.test(chkpt_dir="/neurospin/psy_sbox/analyses/2023_pauriau_sepmod/models/mri/20240124_strong_encoder",
-    #           exp_name="resnet18scz", dataset="scz", labels=["diagnosis", "sex", "age", "site"], list_epochs=[i for i in range(10, 50, 10)] + [49])
