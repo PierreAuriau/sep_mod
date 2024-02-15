@@ -240,9 +240,6 @@ class ClinicalBase(ABC, Dataset):
             if name in self._target_mappings.keys():
                 target[i] = self._target_mappings[name][target[i]]
         return target
-    
-    def get_target(self):
-        return self.target
 
     def load_pickle(self, path: str):
         with open(path, 'rb') as f:
