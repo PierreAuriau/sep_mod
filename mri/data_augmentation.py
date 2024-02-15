@@ -117,6 +117,9 @@ class Cutout(object):
                                                    self.image_shape)
             self.min_size = self._get_patch_size(self.min_size,
                                                  self.image_shape)
+        self.shuffle = kwargs.get("shuffle", False)
+        if self.shuffle:
+            logger.warning("Cutout: shuffle pixels, ignoring value")
 
     def __call__(self, arr):
         if self.image_shape is None:
@@ -149,7 +152,11 @@ class Cutout(object):
             else:
                 delta_before = np.random.randint(0, shape - size + 1)
             indexes.append(slice(delta_before, delta_before + size))
-        arr[tuple(indexes)] = self.value
+        if self.shuffle:
+            sh = [s.stop - s.start for s in indexes]
+            arr[tuple(indexes)] = np.random.shuffle(arr[tuple(indexes)].flat).reshape(sh)
+        else:
+            arr[tuple(indexes)] = self.value
         return arr
 
     @staticmethod
