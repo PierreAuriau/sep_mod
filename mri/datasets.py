@@ -10,7 +10,7 @@ import pandas as pd
 import numpy as np
 from abc import ABC, abstractmethod
 
-from typing import Callable, List, Type, Sequence, Dict
+from typing import Callable, List, Type, Sequence, Dict, Union
 from torch.utils.data.dataset import Dataset
 
 logger = logging.getLogger()
@@ -47,7 +47,7 @@ class ClinicalBase(ABC, Dataset):
           * id: pandas DataFrame, each row contains a unique identifier for an image
 
     """
-    def __init__(self, root: str, preproc: [str, List[str]] = 'vbm', target: [str, List[str]] = 'diagnosis',
+    def __init__(self, root: str, preproc: Union[str, List[str]] = 'vbm', target: Union[str, List[str]] = 'diagnosis',
                  split: str = 'train', transforms: Callable[[np.ndarray], np.ndarray] = None,
                  load_data: bool = False, two_views: bool = False):
         """
@@ -82,10 +82,10 @@ class ClinicalBase(ABC, Dataset):
             self.root, self._train_val_test_scheme))[self.split]
         # target
         if isinstance(target, str):
-            assert target in {"age", "sex", "diagnosis", "site"}, f"Unknown target: {target}"
+            assert target in {"age", "sex", "diagnosis", "site", "tiv", "skeleton_size"}, f"Unknown target: {target}"
             self.target_name = [target]
         elif isinstance(target, list):
-            assert set(target) <= {"age", "sex", "diagnosis", "site"}, f"Unknown target: {target}"
+            assert set(target) <= {"age", "sex", "diagnosis", "site", "tiv", "skeleton_size"}, f"Unknown target: {target}"
             self.target_name = target
         self.transforms = transforms
         # transforms
@@ -126,7 +126,7 @@ class ClinicalBase(ABC, Dataset):
         self.target = df[mask][self.target_name]
         assert self.target.isna().sum().sum() == 0, f"Missing values for {self.target_name} label"
         self.target = self.target.apply(self.target_transform_fn, axis=1, raw=True).values.astype(np.float32)
-        all_keys = ["age", "sex", "diagnosis", "site"]
+        all_keys = ["age", "sex", "diagnosis", "site", "tiv", "skeleton_size"]
         self.all_labels = df[mask][all_keys].reset_index(drop=True)
         # Transforms (dx, site) according to _target_mappings
         self.all_labels = self.all_labels.apply(lambda row: [row[0], 
@@ -365,7 +365,7 @@ class BDDataset(ClinicalBase):
 
     @property
     def _train_val_test_scheme(self):
-        return "train_val_test_test-intra_bip_stratified.pkl"
+        return "train_val_test_test-intra_bd_stratified.pkl"
 
     @property
     def _unique_keys(self):
@@ -373,7 +373,8 @@ class BDDataset(ClinicalBase):
 
     @property
     def _target_mappings(self):
-        return dict(diagnosis={"control": 0, "bipolar": 1, "bipolar disorder": 1, "psychotic bipolar disorder": 1, "bd": 1},
+        return dict(diagnosis={"control": 0, "bipolar": 1, "bipolar disorder": 1, 
+                               "psychotic bipolar disorder": 1, "bd": 1, "psychotic bd": 1},
                     sex={"M": 0, "F": 1},
                     site=self._site_mapping)
 
@@ -381,7 +382,7 @@ class BDDataset(ClinicalBase):
         return super()._check_integrity() & os.path.isfile(os.path.join(self.root, "mapping_site_name-class_bd.pkl"))
 
     def __init__(self, root: str, *args, **kwargs):
-        self._site_mapping = self.load_pickle(os.path.join(root, "mapping_site_name-class_bip.pkl"))
+        self._site_mapping = self.load_pickle(os.path.join(root, "mapping_site_name-class_bd.pkl"))
         super().__init__(root, *args, **kwargs)
 
 
@@ -403,7 +404,7 @@ class ASDDataset(ClinicalBase):
     def _target_mappings(self):
         return dict(diagnosis={"control": 0, "autism": 1, "asd": 1},
                     sex={"M": 0, "F": 1},
-                    site=self._site_mapping)
+                    site=self._site_mapping)    
 
     def _check_integrity(self):
         return super()._check_integrity() & os.path.isfile(os.path.join(self.root, "mapping_site_name-class_asd.pkl"))
@@ -413,7 +414,12 @@ class ASDDataset(ClinicalBase):
         super().__init__(root, *args, **kwargs)
 
 if __name__ == "__main__":
-    dataset = SCZDataset(root="/neurospin/psy_sbox/analyses/2023_pauriau_sepmod/data/root", preproc=["vbm", "skeleton"], split="test")
-    for sample in dataset:
-        print(sample)
-        break
+    for split in ["train", "validation", "test", "test_intra"]:
+        dataset = SCZDataset(root="/neurospin/psy_sbox/analyses/2023_pauriau_sepmod/data/root", preproc=["vbm", "skeleton"], split=split)
+        print(split, len(dataset))
+        print((dataset.target == 1).sum() / len(dataset))
+        """
+        for sample in dataset:
+            print(sample)
+            break
+        """

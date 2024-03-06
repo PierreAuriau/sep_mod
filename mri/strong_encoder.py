@@ -244,7 +244,7 @@ class StrongEncoder(object):
                     metrics = {"roc_auc": lambda y_pred, y_true: roc_auc_score(y_score=y_pred[:, 1], y_true=y_true),
                                "balanced_accuracy": lambda y_pred, y_true : balanced_accuracy_score(y_pred=y_pred.argmax(axis=1),
                                                                                                      y_true=y_true)}
-                elif label in ("age", "tiv"):
+                elif label in ("age", "tiv", "skeleton_size"):
                     clf = Ridge()
                     clf.get_predictions = clf.predict
                     metrics = {"rmse": lambda y_pred, y_true: mean_squared_error(y_pred=y_pred, y_true=y_true, squared=False)}
@@ -359,7 +359,7 @@ def parse_args(argv):
                         help="Number of training epochs. Default is 50.")
     parser.add_argument("--data_augmentation", type=str, choices=["cutout", "all_tf"],
                         help="Apply data augmentations during training.")
-    parser.add_argument("--labels", type=str, nargs="+", choices=["diagnosis", "age", "site", "sex", "tiv"],
+    parser.add_argument("--labels", type=str, nargs="+", choices=["diagnosis", "age", "site", "sex", "tiv", "skeleton_size"],
                         help="Labels on which the model will be tested.")
     parser.add_argument("--epochs_to_test", type=int, nargs="+", default=49,
                         help="Epoch at which the model will be tested.")
