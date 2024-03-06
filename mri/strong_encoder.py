@@ -259,11 +259,19 @@ class StrongEncoder(object):
                                                                                labels=lbl),
                                "balanced_accuracy": lambda y_pred, y_true: balanced_accuracy_score(y_pred=map_lbl(y_pred.argmax(axis=1)),
                                                                                                     y_true=y_true)}
-                for encoder in ("weak", "common", "specific"):
+                for encoder in ("weak", "common", "specific", "strong"):
                     logger.info(f"Test {encoder} encoder on {label}")
-                    clf = clf.fit(representations[encoder]["train"], y_true["train"][:, i])
+                    if encoder == "strong":
+                        repr = np.concatenate((representations["specific"]["train"], representations["common"]["train"]), axis=1)
+                    else:
+                        repr = representations[encoder]["train"]
+                    clf = clf.fit(repr, y_true["train"][:, i])
                     for split in splits:
-                        y_pred = clf.get_predictions(representations[encoder][split])
+                        if encoder == "strong":
+                            repr = np.concatenate((representations["specific"][split], representations["common"][split]), axis=1)
+                        else:
+                            repr = representations[encoder][split]
+                        y_pred = clf.get_predictions(repr)
                         values = {}
                         for name, metric in metrics.items():
                             values[name] = metric(y_pred=y_pred, y_true=y_true[split][:, i])
