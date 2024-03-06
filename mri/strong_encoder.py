@@ -68,7 +68,7 @@ class StrongEncoder(object):
         # loader
         manager = TwoModalityDataManager(root="/neurospin/psy_sbox/analyses/2023_pauriau_sepmod/data/root", 
                                          db=dataset, weak_modality="skeleton", strong_modality="vbm",
-                                         labels=None, batch_size=8, two_views=True,
+                                         labels=None, batch_size=24, two_views=True,
                                          data_augmentation=data_augmentation,
                                          num_workers=8, pin_memory=True)
         loader = manager.get_dataloader(train=True, validation=False)
@@ -210,7 +210,7 @@ class StrongEncoder(object):
                                             validation=True,
                                             test=True)
             # get embeddings
-            representations = {} # representations
+            representations = {"specific": {}, "common": {}, "weak": {}}
             y_true = {} # ground truth labels
             filename = os.path.join(self.chkpdt_dir, self.get_representation_name(epoch=epoch))
             if os.path.exists(filename):
