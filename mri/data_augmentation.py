@@ -5,7 +5,7 @@
 # Import
 import logging
 import numpy as np
-from scipy.ndimage import rotate, gaussian_filter
+from scipy.ndimage import rotate, gaussian_filter, shift
 from skimage import transform as sk_tf
 import torch
 import torch.nn as nn
@@ -351,4 +351,24 @@ class Noise(object):
         return transformed
     
     def __str__(self):
-        return f""
+        return f"Noise(snr={self.snr})"
+    
+
+class Shift(object):
+    """ Translate the image of a number of voxels.
+    """
+    def __init__(self, nb_voxels, random):
+        self.random = random
+        self.nb_voxels = nb_voxels
+
+    def __call__(self, arr):
+        ndim = arr.ndim
+        if self.random:
+            translation = np.random.randint(-self.nb_voxels, self.nb_voxels+1, size=ndim)
+        else:
+            if isinstance(self.nb_voxels, int):
+                translation = [self.nb_voxels for _ in range(ndim)]
+            else:
+                translation = self.nb_voxels
+        transformed = shift(arr, translation, order=0, mode='constant', cval=0.0, prefilter=False)
+        return transformed
