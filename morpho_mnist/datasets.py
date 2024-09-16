@@ -8,20 +8,24 @@ import torch
 import torch.nn as nn
 from torch.utils.data import Dataset
 from torchvision.transforms import transforms
+from config import Config
 
+config = Config()
 
 class MorphoMNISTDataset(Dataset):
     def __init__(self, split, targets=None):
         
-        data_dir = "/neurospin/psy_sbox/analyses/2023_pauriau_sepmod/data/morpho_mnist"
         if split == "test":
             split = "t10k"
-        self.skeletons = np.load(os.path.join(data_dir, f"{split}-skeletons.npy"), mmap_mode="r")
-        self.images = np.load(os.path.join(data_dir, f"{split}-images.npy"), mmap_mode="r")
-        self.labels = pd.read_csv(os.path.join(data_dir, f"{split}-morpho.csv"), sep=",")        
+        self.skeletons = np.load(os.path.join(config.data_dir, f"{split}-skeletons.npy"), mmap_mode="r")
+        self.images = np.load(os.path.join(config.data_dir, f"{split}-images.npy"), mmap_mode="r")
+        self.labels = pd.read_csv(os.path.join(config.data_dir, f"{split}-morpho.csv"), sep=",")        
         self.transforms = transforms.Compose([lambda arr: transforms.ToTensor()(arr.astype(np.float32)),
                                               transforms.Normalize(mean=0.5, std=0.5)])
-        self.targets = targets
+        if targets == "all":
+            self.targets = list(self.labels.columns )
+        else:
+            self.targets = targets
         
     def __getitem__(self, idx):
         skel = self.skeletons[idx]
