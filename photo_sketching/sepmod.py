@@ -23,10 +23,6 @@ from loggers import TrainLogger
 
 logging.setLoggerClass(TrainLogger)
 
-
-# FIXME : add attributs for specific/shared indices of latent space DONE
-# FIXME : add attributes for tc loss DONE
-
 # FIXME : dataset return tensordict ?
 # FIXME : forward : cat before or after reparametrize ?
 # FIXME : optimizers for tc loss : one or several ?
@@ -40,7 +36,21 @@ class SepMod(nn.Module):
     def __init__(self, input_channels, latent_dim=256, 
                  tc_loss_between_specifics=False,
                  tc_loss_between_shared_and_specific=True, 
-                 kl_loss_between_shared=True):
+                 loss_between_shared="kl"):
+        """
+        Parameters
+        ----------
+        input_channels : int 
+            Number of input channels (3 for images, 1 for sketches).
+        latent_dim: int 
+            Dimension of latent space.
+        tc_loss_between_specifics: bool
+            Whether to add TC loss between specific representations.
+        tc_loss_between_shared_and_specific: bool
+            Whether add TC loss between shared and specific representations.
+        loss_between_shared: str, [None, "kl", "mmd"]
+            Whether to add loss between shared representations.
+        """
         super().__init__()
         self.encoders = nn.ModuleDict({
             "sketch": Encoder(input_channels=input_channels,
@@ -70,7 +80,7 @@ class SepMod(nn.Module):
         self.specific_slice = slice(0, (latent_dim//2)) # see get_embeddings, train/valid step
         self.shared_slice = slice((latent_dim//2), latent_dim) # see get_embeddings, train/valid step
         self.tc_loss_between_specifics = tc_loss_between_specifics
-        self.kl_loss_between_shared = kl_loss_between_shared
+        self.loss_between_shared = loss_between_shared
         self.tc_loss_between_shared_and_specific = tc_loss_between_shared_and_specific
         self.betas = defaultdict(lambda: 1.0)
 
@@ -110,7 +120,7 @@ class SepMod(nn.Module):
         # if self.tc_loss_between_specifics:
         #     tc_loss += F.relu(torch.log(joint_predictions["specific"] / (1 - joint_predictions["specific"]))).sum()
         alg_loss = 0
-        if self.kl_loss_between_shared:
+        if self.loss_between_shared == "kl":
             alg_loss = self.kl_divergence(mean_shared["photo"], logvar_shared["photo"], mean_shared["sketch"], logvar_shared["sketch"])
         return kl_loss, rec_loss, tc_loss, alg_loss
 
@@ -271,7 +281,7 @@ class SepMod(nn.Module):
             if self.tc_loss_between_shared_and_specific or self.tc_loss_between_specifics:
                 loss += self.betas["total_correlation"]*tc_loss
                 self.logger.store(total_correlation_loss=tc_loss.item())
-            if self.kl_loss_between_shared:
+            if self.loss_between_shared is not None:
                 loss += self.betas["alignement"]*alg_loss
                 self.logger.store(alignement_loss=alg_loss.item())
         self.scaler.scale(loss).backward()
@@ -305,7 +315,7 @@ class SepMod(nn.Module):
             if self.tc_loss_between_shared_and_specific or self.tc_loss_between_specifics:
                 loss += tc_loss
                 self.logger.store( total_correlation_loss=tc_loss.item())
-            if self.kl_loss_between_shared:
+            if self.loss_between_shared is not None:
                 loss += self.betas["alignement"]*alg_loss
                 self.logger.store(alignement_loss=alg_loss.item())
         return loss.item()
@@ -364,7 +374,7 @@ class SepMod(nn.Module):
         hp = {"latent_dim": self.latent_dim,
               "tc_loss_between_shared_and_specific": self.tc_loss_between_shared_and_specific,
               "tc_loss_between_specifics": self.tc_loss_between_specifics,
-              "kl_loss_between_shared": self.kl_loss_between_shared}
+              "loss_between_shared": self.loss_between_shared}
         for key, value in self.betas.items():
             hp[f"beta_{key}"] = value
         with open(os.path.join(chkpt_dir, "hyperparameters.json"), "w") as f:
