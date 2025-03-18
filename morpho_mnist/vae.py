@@ -18,8 +18,8 @@ import torch.nn.functional as F
 from sklearn.linear_model import LogisticRegression, Ridge
 from sklearn.metrics import balanced_accuracy_score, mean_absolute_error, mean_squared_error
 
-from encoders import Encoder, Conv6Encoder
-from decoders import Decoder, Conv6Decoder
+from encoders import Encoder, Conv6Encoder, PytorchEncoder
+from decoders import Decoder, Conv6Decoder, PytorchDecoder
 from loggers import TrainLogger
 
 logging.setLoggerClass(TrainLogger)
@@ -32,12 +32,16 @@ class VAE(nn.Module):
         if nb_layers == 6:
             self.encoder = Conv6Encoder(latent_dim=latent_dim)
             self.decoder = Conv6Decoder(latent_dim=latent_dim)
+        elif nb_layers == 5:
+            self.encoder = PytorchEncoder(latent_dim=latent_dim)
+            self.decoder = PytorchDecoder(latent_dim=latent_dim)
         else:
             self.encoder = Encoder(latent_dim=latent_dim)
             self.decoder = Decoder(latent_dim=latent_dim)
-        self.nb_layers = 7 if nb_layers == 7 else 3
-        self.beta = beta # FIXME: in init or in fit method ?
+        self.nb_layers = nb_layers if nb_layers in [6, 5] else 3
         self.latent_dim = latent_dim
+        self.beta = beta # FIXME: in init or in fit method ?
+        self.reconstruction_loss = "mse"
         self.logger = logging.getLogger("vae")
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.logger.info(f"Device used : {self.device}")
@@ -49,7 +53,12 @@ class VAE(nn.Module):
 
     def loss_fn(self, inputs, outputs, mean, logvar):
         kl_loss = -0.5 * torch.sum(1 + logvar - mean.pow(2) - logvar.exp())
-        rec_loss = F.mse_loss(outputs, inputs, reduction="sum")
+        if self.reconstruction_loss == "bce":
+            rec_loss = F.binary_cross_entropy(outputs, inputs, reduction="sum")
+        elif self.reconstruction_loss == "l1":
+            rec_loss = F.l1_loss(outputs, inputs, reduction="sum")
+        else:
+            rec_loss = F.mse_loss(outputs, inputs, reduction="sum")
         return rec_loss, kl_loss
 
     def forward(self, inputs):
@@ -164,7 +173,7 @@ class VAE(nn.Module):
         # Train and test linear models
         logs = defaultdict(list)       
         for target in targets:
-            if target == "label":
+            if target in ["label", "fracture"]:
                 log_reg = LogisticRegression(penalty="l2", C=1.0, fit_intercept=True, max_iter=1000)
                 log_reg.fit(z["train"], y["train"][target])
                 for split in ("train", "test"):
@@ -195,7 +204,7 @@ class VAE(nn.Module):
         logs = pd.DataFrame(logs)
         logs.to_csv(os.path.join(chkpt_dir, "linear_predictions_from_embeddings.csv"), index=False)
 
-    def get_reconstructions(self, loader, modality):
+    def get_reconstructions(self, loader, modality, raw=False):
         self.encoder.eval()
         self.decoder.eval()
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -207,8 +216,10 @@ class VAE(nn.Module):
                 inputs = batch[modality].to(self.device)
                 outputs.extend(self(inputs).cpu().numpy())
         outputs = np.asarray(outputs)
+        if raw:
+            return outputs
         # normalize outputs
-        if self.nb_layers == 7: # with sigmoid
+        if self.nb_layers == 6: # with sigmoid
             outputs = outputs * 255
         else: # no sigmoid
             outputs = (outputs - outputs.min(axis=0)) / (outputs.max(axis=0) - outputs.min(axis=0)) * 255
