@@ -14,8 +14,8 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 
-from encoders import Encoder, Conv7Encoder
-from decoders import Decoder, Conv7Decoder
+from encoders import Encoder, Conv7Encoder, AntixKEncoder
+from decoders import Decoder, Conv7Decoder, AntixKDecoder
 from loggers import TrainLogger
 
 logging.setLoggerClass(TrainLogger)
@@ -30,13 +30,18 @@ class VAE(nn.Module):
                                         latent_dim=latent_dim)
             self.decoder = Conv7Decoder(input_channels=input_channels,
                                         latent_dim=latent_dim)
+        elif nb_layers == 6:
+            self.encoder = AntixKEncoder(input_channels=input_channels,
+                                         latent_dim=latent_dim)
+            self.decoder = AntixKDecoder(input_channels=input_channels,
+                                         latent_dim=latent_dim)
         else:
             self.encoder = Encoder(input_channels=input_channels,
-                                        latent_dim=latent_dim)
+                                   latent_dim=latent_dim)
             self.decoder = Decoder(input_channels=input_channels,
-                                        latent_dim=latent_dim)
+                                   latent_dim=latent_dim)
         """self.scale = nn.Parameter(torch.tensor([0.0]))"""
-        self.nb_layers = 7 if nb_layers == 7 else 4
+        self.nb_layers = nb_layers if nb_layers in [6, 7] else 4
         self.beta = beta # FIXME: in init or in fit method ?
         self.latent_dim = latent_dim
         self.logger = logging.getLogger("vae")
@@ -188,8 +193,12 @@ class VAE(nn.Module):
         # normalize outputs
         if self.nb_layers == 7: # with sigmoid
             outputs = outputs * 255
+        elif self.nb_layers == 6: # with tanh
+            outputs = (outputs + 1) * (255 / 2)
         else: # no sigmoid
             outputs = (outputs - outputs.min(axis=0)) / (outputs.max(axis=0) - outputs.min(axis=0)) * 255
+        assert np.all(outputs >= 0) & np.all(outputs <= 256), \
+            f"outputs of decoder have wrong data range ({outputs.min(), outputs.max()})"
         outputs = outputs.astype(int)
         # put channels in last
         outputs = np.moveaxis(outputs, 1, -1)
