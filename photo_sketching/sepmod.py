@@ -16,8 +16,8 @@ import torch.optim as optim
 import torch.nn.functional as F
 from torch.cuda.amp import GradScaler, autocast
 
-from encoders import Encoder, Conv7Encoder
-from decoders import Decoder, Conv7Decoder
+from encoders import Encoder, Conv7Encoder, AntixKEncoder
+from decoders import Decoder, Conv7Decoder, AntixKDecoder
 from classifiers import Classifier
 from loggers import TrainLogger
 
@@ -41,7 +41,7 @@ class SepMod(nn.Module):
         Parameters
         ----------
         input_channels : int 
-            Number of input channels (3 for images, 1 for sketches).
+            Number of input channels.
         latent_dim: int 
             Dimension of latent space.
         tc_loss_between_specifics: bool
@@ -53,17 +53,17 @@ class SepMod(nn.Module):
         """
         super().__init__()
         self.encoders = nn.ModuleDict({
-            "sketch": Encoder(input_channels=input_channels,
+            "sketch": AntixKEncoder(input_channels=input_channels,
                               latent_dim=latent_dim//2),
-            "photo": Encoder(input_channels=input_channels,
+            "photo": AntixKEncoder(input_channels=input_channels,
                              latent_dim=latent_dim//2),
-            "shared": Encoder(input_channels=input_channels,
+            "shared": AntixKEncoder(input_channels=input_channels,
                               latent_dim=latent_dim//2)
         })
         self.decoders = nn.ModuleDict({
-            "sketch": Decoder(input_channels=input_channels,
+            "sketch": AntixKDecoder(input_channels=input_channels,
                               latent_dim=latent_dim),
-            "photo": Decoder(input_channels=input_channels,
+            "photo": AntixKDecoder(input_channels=input_channels,
                              latent_dim=latent_dim)
         })        
 
@@ -83,8 +83,10 @@ class SepMod(nn.Module):
         self.loss_between_shared = loss_between_shared
         self.tc_loss_between_shared_and_specific = tc_loss_between_shared_and_specific
         self.betas = defaultdict(lambda: 1.0)
+        self.gammas = torch.FloatTensor([10 ** x for x in range(-6, 7, 1)])
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self = self.to(self.device)
         self.logger.info(f"Device used : {self.device}")
         if not (tc_loss_between_shared_and_specific or tc_loss_between_shared_and_specific):
             self.logger.warning("NO TC LOSS")
@@ -103,9 +105,28 @@ class SepMod(nn.Module):
         else:
             kl_div = -0.5 * torch.sum(1 + logvar - logvar_  - (logvar.exp() + (mean - mean_).pow(2)) / (2*logvar_.exp()))
         return kl_div
-
     
-    def loss_fn(self, inputs, outputs, mean_specific, logvar_specific, mean_shared, logvar_shared, joint_predictions):
+    def mmd(self, x, y):
+        gammas = self.gammas.to(self.device)
+        cost = torch.mean(self.gram_matrix(x, x, gammas=gammas)).to(self.device)
+        cost += torch.mean(self.gram_matrix(y, y, gammas=gammas)).to(self.device)
+        cost -= 2 * torch.mean(self.gram_matrix(x, y, gammas=gammas)).to(self.device)
+
+        if cost < 0:
+            return torch.tensor(0).to(self.device)
+        return cost
+
+    @staticmethod
+    def gram_matrix(x, y, gammas):
+        gammas = gammas.unsqueeze(1)
+        pairwise_distances = torch.cdist(x, y, p=2.0)
+
+        pairwise_distances_sq = torch.square(pairwise_distances)
+        tmp = torch.matmul(gammas, torch.reshape(pairwise_distances_sq, (1, -1)))
+        tmp = torch.reshape(torch.sum(torch.exp(-tmp), 0), pairwise_distances_sq.shape)
+        return tmp
+        
+    def loss_fn(self, inputs, outputs, mean_specific, logvar_specific, mean_shared, logvar_shared, joint_predictions, z_shared):
         kl_loss = 0
         for mod in ("photo", "sketch"):
             kl_loss += self.kl_divergence(mean_specific[mod], logvar_specific[mod])
@@ -122,6 +143,8 @@ class SepMod(nn.Module):
         alg_loss = 0
         if self.loss_between_shared == "kl":
             alg_loss = self.kl_divergence(mean_shared["photo"], logvar_shared["photo"], mean_shared["sketch"], logvar_shared["sketch"])
+        elif self.loss_between_shared == "mmd":
+            alg_loss = self.mmd(z_shared["photo"], z_shared["sketch"])
         return kl_loss, rec_loss, tc_loss, alg_loss
 
     def forward(self, inputs):
@@ -181,6 +204,7 @@ class SepMod(nn.Module):
                 train_loss += self.training_step(inputs)
             self.logger.reduce(reduce_fx="sum")
             self.logger.store(epoch=epoch, set="train", loss=train_loss)
+            self.logger.debug(f"alignement loss : {self.logger.history[self.logger.get_current_step()]['alignement_loss']}")
             
             self.eval()
             self.logger.step()
@@ -252,24 +276,27 @@ class SepMod(nn.Module):
         self.optimizer_vae.zero_grad()
         mean_specific, logvar_specific = {}, {}
         mean_shared, logvar_shared = {}, {}
-        z, outputs = {}, {}
+        z_shared, z_specific, outputs = {}, {}, {}
         joint_predictions = {}
         with autocast(dtype=torch.float32):
             for mod in ("photo", "sketch"):
                 mean_specific[mod], logvar_specific[mod] = self.encoders[mod](inputs[mod])
                 mean_shared[mod], logvar_shared[mod] = self.encoders["shared"](inputs[mod])
-                z[mod] = torch.cat((self.reparamatrize(mean_specific[mod], logvar_specific[mod]),
-                                    self.reparamatrize(mean_shared[mod], logvar_shared[mod])), 
-                                   dim=1)
-                outputs[mod] = self.decoders[mod](z[mod])
+                z_specific[mod] = self.reparamatrize(mean_specific[mod], logvar_specific[mod])
+                z_shared[mod] = self.reparamatrize(mean_shared[mod], logvar_shared[mod])
+                outputs[mod] = self.decoders[mod](torch.cat((z_specific[mod],
+                                                             z_shared[mod]), 
+                                                            dim=1))
                 if self.tc_loss_between_shared_and_specific:
-                    joint_predictions[mod] = self.discriminators[mod](z[mod])
+                    joint_predictions[mod] = self.discriminators[mod](torch.cat((z_specific[mod],
+                                                                                 z_shared[mod]), 
+                                                                                dim=1))
             # if self.tc_loss_between_specifics:
             #     z_specific = torch.cat((z["photo"][:, self.specific_slice] ,
             #                             z["sketch"][:, self.specific_slice]), 
             #                         dim=1)
             #     joint_predictions["specific"] = self.discriminators["specific"](z_specific)
-            kl_loss, rec_loss, tc_loss, alg_loss = self.loss_fn(inputs, outputs, mean_specific, logvar_specific, mean_shared, logvar_shared, joint_predictions)
+            kl_loss, rec_loss, tc_loss, alg_loss = self.loss_fn(inputs, outputs, mean_specific, logvar_specific, mean_shared, logvar_shared, joint_predictions, z_shared)
             # if torch.isnan(tc_loss):
             #     import pdb
             #     pdb.set_trace(header="Nan")
@@ -292,29 +319,32 @@ class SepMod(nn.Module):
     def valid_step(self, inputs):
         mean_specific, logvar_specific = {}, {}
         mean_shared, logvar_shared = {}, {}
-        z, outputs = {}, {}
+        z_specific, z_shared, outputs = {}, {}, {}
         joint_predictions = {}
         with torch.no_grad():
             for mod in ("photo", "sketch"):
                 mean_specific[mod], logvar_specific[mod] = self.encoders[mod](inputs[mod])
                 mean_shared[mod], logvar_shared[mod] = self.encoders["shared"](inputs[mod])
-                z[mod] = torch.cat((self.reparamatrize(mean_specific[mod], logvar_specific[mod]),
-                                    self.reparamatrize(mean_shared[mod], logvar_shared[mod])), 
-                                   dim=1)
-                outputs[mod] = self.decoders[mod](z[mod])
+                z_specific[mod] = self.reparamatrize(mean_specific[mod], logvar_specific[mod]) 
+                z_shared[mod] = self.reparamatrize(mean_shared[mod], logvar_shared[mod])
+                outputs[mod] = self.decoders[mod](torch.cat((z_specific[mod],
+                                                             z_shared[mod]),
+                                                             dim=1))
                 if self.tc_loss_between_shared_and_specific:
-                    joint_predictions[mod] = self.discriminators[mod](z[mod])
+                    joint_predictions[mod] = self.discriminators[mod](torch.cat((z_specific[mod],
+                                                                                 z_shared[mod]),
+                                                                                 dim=1))
         # if self.tc_loss_between_specifics:
         #     z_specific = torch.cat((z["photo"][:, (self.latent_dim//2):] ,
         #                             z["sketch"][:, (self.latent_dim//2):]), 
         #                         dim=1)
         #     joint_predictions["specific"] = self.discriminators["specific"](z_specific)
-            kl_loss, rec_loss, tc_loss, alg_loss = self.loss_fn(inputs, outputs, mean_specific, logvar_specific, mean_shared, logvar_shared, joint_predictions)
+            kl_loss, rec_loss, tc_loss, alg_loss = self.loss_fn(inputs, outputs, mean_specific, logvar_specific, mean_shared, logvar_shared, joint_predictions, z_shared)
             self.logger.store(kl_loss=kl_loss.item(), reconstruction_loss=rec_loss.item())
             loss = kl_loss + rec_loss
             if self.tc_loss_between_shared_and_specific or self.tc_loss_between_specifics:
                 loss += tc_loss
-                self.logger.store( total_correlation_loss=tc_loss.item())
+                self.logger.store(total_correlation_loss=tc_loss.item())
             if self.loss_between_shared is not None:
                 loss += self.betas["alignement"]*alg_loss
                 self.logger.store(alignement_loss=alg_loss.item())
@@ -374,7 +404,8 @@ class SepMod(nn.Module):
         hp = {"latent_dim": self.latent_dim,
               "tc_loss_between_shared_and_specific": self.tc_loss_between_shared_and_specific,
               "tc_loss_between_specifics": self.tc_loss_between_specifics,
-              "loss_between_shared": self.loss_between_shared}
+              "loss_between_shared": self.loss_between_shared
+              }
         for key, value in self.betas.items():
             hp[f"beta_{key}"] = value
         with open(os.path.join(chkpt_dir, "hyperparameters.json"), "w") as f:
