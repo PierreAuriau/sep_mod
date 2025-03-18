@@ -55,6 +55,55 @@ class Conv6Decoder(nn.Module):
         x = self.sigmoid(x)
         return x
 
+
+class PytorchDecoder(nn.Module):
+
+    def __init__(self, input_channels=1, latent_dim=256, 
+                 hidden_dims=[512, 256, 128, 64, 32, 16]):
+        """
+        link to Github: <https://github.com/AntixK/PyTorch-VAE>
+        """
+        super().__init__()
+        
+        self.decoder_input = nn.Linear(latent_dim, hidden_dims[0] * 4)
+
+        modules = []
+        for i in range(len(hidden_dims) - 1):
+            modules.append(
+                nn.Sequential(
+                    nn.ConvTranspose2d(hidden_dims[i],
+                                       hidden_dims[i + 1],
+                                       kernel_size=3,
+                                       stride = 2,
+                                       padding=1,
+                                       output_padding=1),
+                    nn.BatchNorm2d(hidden_dims[i + 1]),
+                    nn.LeakyReLU())
+            )
+        
+        self.decoder = nn.Sequential(*modules)
+
+        self.final_layer = nn.Sequential(
+                            nn.ConvTranspose2d(hidden_dims[-1],
+                                               hidden_dims[-1],
+                                               kernel_size=3,
+                                               stride=2,
+                                               padding=1,
+                                               output_padding=1),
+                            nn.BatchNorm2d(hidden_dims[-1]),
+                            nn.LeakyReLU(),
+                            nn.Conv2d(hidden_dims[-1], out_channels=input_channels,
+                                      kernel_size=3, padding=1),
+                            nn.Tanh())
+        
+    def forward(self, z):
+        result = self.decoder_input(z)
+        result = result.view(-1, 512, 2, 2)
+        result = self.decoder(result)
+        result = self.final_layer(result)
+        return result
+    
+
 """
 class SeqDecoder(nn.Module):
 

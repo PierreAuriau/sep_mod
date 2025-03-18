@@ -65,6 +65,41 @@ class Conv7Encoder(nn.Module):
         logvar = self.fc_logvar(x)
         return mean, logvar
 
+
+class AntixKEncoder(nn.Module):
+
+    def __init__(self, input_channels=3, latent_dim=256, hidden_dims=[8, 16, 32, 64, 128, 256, 512]):
+        """
+        link to Github: <https://github.com/AntixK/PyTorch-VAE>
+        """
+        super().__init__()
+
+        modules = []
+
+        # Build Encoder
+        in_channels = input_channels
+        for h_dim in hidden_dims:
+            modules.append(
+                nn.Sequential(
+                    nn.Conv2d(in_channels, out_channels=h_dim, 
+                              kernel_size=3, stride=2, padding=1),
+                    nn.BatchNorm2d(h_dim),
+                    nn.LeakyReLU())
+            )
+            in_channels = h_dim
+
+        self.encoder = nn.Sequential(*modules)
+        self.flatten = nn.Flatten()
+        self.fc_mean = nn.Linear(hidden_dims[-1]*4, latent_dim)
+        self.fc_var = nn.Linear(hidden_dims[-1]*4, latent_dim)
+
+    def forward(self, x):
+        encoding = self.flatten(self.encoder(x))
+        mean = self.fc_mean(encoding)
+        logvar = self.fc_var(encoding)
+        return mean, logvar
+
+
 """
 class SeqEncoder(nn.Module):
 
@@ -99,3 +134,10 @@ class SeqEncoder(nn.Module):
         logvar = self.fc_logvar(x)
         return mean, logvar
 """
+
+if __name__ == "__main__":
+    x = torch.randn(64, 3, 256, 256)
+    encoder = AntixKEncoder()
+    mean, logvar = encoder(x)
+
+    print(mean.size(), logvar.size())
